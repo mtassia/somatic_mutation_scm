@@ -3,7 +3,7 @@ source("dev/scripts/SCM_functions.R")
 ##### Data import #####
 #Read tree
 tr<-read.tree(file="dev/data/DH.phylogenetic_sites.synthetic_reference.vcf.cellphy.raxml.supportFBP") %>%
-  root(outgroup="DH",resolve.root = T) %>% 
+  root(outgroup="DH", resolve.root = T) %>%
   drop.tip("DH") %>%
   ladderize()
 #tree<-collapse_poor_supported_edges(tree,90)
