@@ -222,140 +222,149 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
                   tidy_vcf$fix %>%
                     select(ChromKey, CHROM) %>%
                     unique(),
-                by = "ChromKey") %>%
+                  by = "ChromKey") %>%
     select(CHROM, POS, Indiv, GT, GQ, PL)
   df <- left_join(df,
                   tidy_vcf$fix %>%
                     select(CHROM, POS, REF, ALT, AC, AF),
                   by = c("CHROM", "POS"))
-  
+
   print("Computing genotype probabilities...")
-  df <- df %>% 
-    mutate(locus=paste(CHROM,POS,sep="_"),
-           gt_str=case_when(GT %in% c("0/0","0|0") ~ paste0(REF,REF),
-                            GT %in% c("1/0","1|0","0/1","0|1") ~ paste0(REF,ALT),
-                            GT %in% c("1/1","1|1") ~ paste0(ALT,ALT),
-                            is.na(GT) ~ NA)) %>%
-    select(locus,CHROM,POS,REF,ALT,AC,AF,Indiv,GT,gt_str,GQ,PL) %>%
-    separate(PL,sep=",",into=c("PL_ref","PL_het","PL_alt")) %>%
-    mutate(GQ = as.integer(GQ),
-           PL_ref=as.integer(PL_ref),
-           PL_het=as.integer(PL_het),
-           PL_alt=as.integer(PL_alt),
-           AF=as.numeric(AF),
-           AC=as.integer(AC)) %>%
-    rowwise() %>%
-    mutate(Pref = unphred(c(PL_ref,PL_het,PL_alt))[1],
-           Phet = unphred(c(PL_ref,PL_het,PL_alt))[2],
-           Palt = unphred(c(PL_ref,PL_het,PL_alt))[3])
   df <- df %>%
-    arrange(CHROM,POS) %>%
-    select(locus,REF,ALT,gt_str,Indiv,Pref,Phet,Palt) %>% #change this to subset df accordingly
+    mutate(locus = paste(CHROM, POS, sep = "_"),
+           gt_str = case_when(GT %in% c("0/0", "0|0") ~ paste0(REF, REF),
+                            GT %in% c("1/0", "1|0", "0/1", "0|1") ~ paste0(REF, ALT),
+                            GT %in% c("1/1", "1|1") ~ paste0(ALT, ALT),
+                            is.na(GT) ~ NA)) %>%
+    select(locus, CHROM, POS, REF, ALT, AC, AF,
+            Indiv, GT, gt_str, GQ, PL) %>%
+    separate(PL, sep = ",", into=c("PL_ref", "PL_het", "PL_alt")) %>%
+    mutate(GQ = as.integer(GQ),
+           PL_ref = as.integer(PL_ref),
+           PL_het = as.integer(PL_het),
+           PL_alt = as.integer(PL_alt),
+           AF = as.numeric(AF),
+           AC = as.integer(AC)) %>%
+    rowwise() %>%
+    mutate(Pref = unphred(c(PL_ref, PL_het, PL_alt))[1],
+           Phet = unphred(c(PL_ref, PL_het, PL_alt))[2],
+           Palt = unphred(c(PL_ref, PL_het, PL_alt))[3])
+  df <- df %>%
+    arrange(CHROM, POS) %>%
+    select(locus, REF, ALT, gt_str, 
+            Indiv, Pref, Phet, Palt) %>%
     as.data.table()
   if (mat_list == FALSE){
     return(df) #Return a long data frame with genotype probabilities for each sample per variant
   } else {
     print("Assembling genotype state matrices for SNPs...")
-    df.snp <- df %>% 
-      group_by(locus) %>% 
-      filter(REF %in% c("A","C","G","T") & ALT %in% c("A","C","G","T"))
-    df.snp$gt_str <- str_split(df.snp$gt_str,pattern = "") %>% 
-      pblapply(., function(x) {sort(x) %>% paste0(.,collapse = "")}) %>% 
+    df.snp <- df %>%
+      group_by(locus) %>%
+      filter(REF %in% c("A", "C", "G", "T") & ALT %in% c("A", "C", "G", "T"))
+    df.snp$gt_str <- str_split(df.snp$gt_str, pattern = "") %>%
+      pblapply(., function(x) {
+        sort(x) %>% paste0(., collapse = "")
+      }) %>%
       unlist()
-    
-    gt_list.snp <- df.snp %>% 
-      group_by(locus) %>% 
+
+    gt_list.snp <- df.snp %>%
+      group_by(locus) %>%
       group_split() %>%
-      pblapply(.,function(x){
-        ref <- head(x,n=1) %>% pull(REF)
-        alt <- head(x,n=1) %>% pull(ALT)
+      pblapply(., function(x){
+        ref <- head(x, n = 1) %>% pull(REF)
+        alt <- head(x, n = 1) %>% pull(ALT)
         colnames(x) <- c("locus","REF","ALT","gt_str","Indiv",
-                       paste0(c(ref,ref),collapse = ""),
-                       paste0(sort(c(ref,alt)),collapse = ""),
-                       paste0(c(alt,alt),collapse = ""))
-        return(x %>% 
-                 select(!c(REF,ALT,gt_str)) %>% 
+                       paste0(c(ref, ref), collapse = ""),
+                       paste0(sort(c(ref, alt)), collapse = ""),
+                       paste0(c(alt, alt), collapse = ""))
+        return(x %>%
+                 select(!c(REF, ALT, gt_str)) %>%
                  as.data.table())
       }) %>%
-      pblapply(.,function(x){
-        cols_to_add <- setdiff(c("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT"),colnames(x)[3:5])
-        x[,cols_to_add] = 0
-        
-        x <- x %>% 
+      pblapply(., function(x) {
+        cols_to_add <- setdiff(c("AA", "CC", "GG", "TT", "AC",
+                                  "AG", "AT", "CG", "CT", "GT"),
+                                colnames(x)[3:5])
+        x[, cols_to_add] = 0
+
+        x <- x %>%
           select(locus,
                  Indiv,
-                 c("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT"))
-        
+                 c("AA", "CC", "GG", "TT", "AC",
+                    "AG", "AT", "CG", "CT", "GT"))
+
         return(x)
       })
     names(gt_list.snp) <- df.snp %>% group_keys() %>% pull()
-    
-    return(gt_list.snp) 
+
+    return(gt_list.snp)
   }
-} 
+}
 
 #Read a vcf and generate a genotype probability matrix for each INDEL site
-compile_gt_states.indel <- function(vcf,mat_list=TRUE){
+compile_gt_states.indel <- function(vcf, mat_list = TRUE) {
   print("Reading vcf data...")
   tidy_vcf <- vcfR2tidy(vcf,
-                      gt_column_prepend="",
-                      allele.sep = ",",
-                      format_fields=c("GT","GQ","PL"))
+                        gt_column_prepend = "",
+                        allele.sep = ",",
+                        format_fields = c("GT", "GQ", "PL"))
   df <- left_join(tidy_vcf$gt,
-                tidy_vcf$fix %>%
-                  select(ChromKey,CHROM) %>%
-                  unique(),
-                by="ChromKey") %>%
-    select(CHROM,POS,Indiv,GT,GQ,PL)
+                  tidy_vcf$fix %>%
+                    select(ChromKey, CHROM) %>%
+                    unique(),
+                  by="ChromKey") %>%
+        select(CHROM, POS, Indiv, GT, GQ, PL)
   df <- left_join(df,
-                tidy_vcf$fix %>%
-                  select(CHROM,POS,REF,ALT,AC,AF),
-                by=c("CHROM","POS"))
-  
+                  tidy_vcf$fix %>%
+                    select(CHROM, POS, REF, ALT, AC, AF),
+                  by = c("CHROM", "POS"))
+
   print("Computing genotype probabilities...")
-  df <- df %>% 
-    mutate(locus=paste(CHROM,POS,sep="_"),
-           gt_str=case_when(GT %in% c("0/0","0|0") ~ paste0(REF,REF),
-                            GT %in% c("1/0","1|0","0/1","0|1") ~ paste0(REF,ALT),
-                            GT %in% c("1/1","1|1") ~ paste0(ALT,ALT),
-                            is.na(GT) ~ NA)) %>%
-    select(locus,CHROM,POS,REF,ALT,AC,AF,Indiv,GT,gt_str,GQ,PL) %>%
-    separate(PL,sep=",",into=c("PL_ref","PL_het","PL_alt")) %>%
-    mutate(GQ = as.integer(GQ),
-           PL_ref=as.integer(PL_ref),
-           PL_het=as.integer(PL_het),
-           PL_alt=as.integer(PL_alt),
-           AF=as.numeric(AF),
-           AC=as.integer(AC)) %>%
-    rowwise() %>%
-    mutate(Pref = unphred(c(PL_ref,PL_het,PL_alt))[1],
-           Phet = unphred(c(PL_ref,PL_het,PL_alt))[2],
-           Palt = unphred(c(PL_ref,PL_het,PL_alt))[3])
   df <- df %>%
-    arrange(CHROM,POS) %>%
-    select(locus,REF,ALT,gt_str,Indiv,Pref,Phet,Palt) %>% #change this to subset df accordingly
+    mutate(locus = paste(CHROM, POS, sep = "_"),
+           gt_str = case_when(GT %in% c("0/0", "0|0") ~ paste0(REF, REF),
+                            GT %in% c("1/0", "1|0", "0/1", "0|1") ~ paste0(REF, ALT),
+                            GT %in% c("1/1", "1|1") ~ paste0(ALT, ALT),
+                            is.na(GT) ~ NA)) %>%
+    select(locus, CHROM, POS, REF, ALT, AC,
+            AF, Indiv, GT, gt_str, GQ, PL) %>%
+    separate(PL, sep = ",", into = c("PL_ref", "PL_het", "PL_alt")) %>%
+    mutate(GQ = as.integer(GQ),
+           PL_ref = as.integer(PL_ref),
+           PL_het = as.integer(PL_het),
+           PL_alt = as.integer(PL_alt),
+           AF = as.numeric(AF),
+           AC = as.integer(AC)) %>%
+    rowwise() %>%
+    mutate(Pref = unphred(c(PL_ref, PL_het, PL_alt))[1],
+           Phet = unphred(c(PL_ref, PL_het, PL_alt))[2],
+           Palt = unphred(c(PL_ref, PL_het, PL_alt))[3])
+  df <- df %>%
+    arrange(CHROM, POS) %>%
+    select(locus ,REF, ALT, gt_str,
+            Indiv, Pref, Phet, Palt) %>%
     as.data.table()
-  if (mat_list == FALSE){
+  if (mat_list == FALSE) {
     return(df) #Return a long data frame with genotype probabilities for each sample per variant
   } else {
     print("Assembling genotype state matrices for indels...")
-    df.indel <- df %>% 
-      group_by(locus) %>% 
+    df.indel <- df %>%
+      group_by(locus) %>%
       filter(nchar(REF) > 1 | nchar(ALT) > 1)
-    
-    gt_list.indel <- df.indel %>% 
-      group_by(locus) %>% 
+
+    gt_list.indel <- df.indel %>%
+      group_by(locus) %>%
       group_split() %>%
-      pblapply(.,function(x){
-        ref <- head(x,n=1) %>% pull(REF)
-        alt <- head(x,n=1) %>% pull(ALT)
-        x <- x %>% 
+      pblapply(., function(x){
+        ref <- head(x, n = 1) %>% pull(REF)
+        alt <- head(x, n = 1) %>% pull(ALT)
+        x <- x %>%
           select(!c(REF,ALT,gt_str))
-        colnames(x) <- c("locus","Indiv","REF","HET","ALT")
+        colnames(x) <- c("locus", "Indiv", "REF", "HET", "ALT")
         return(as.data.table(x))
       })
     names(gt_list.indel) <- df.indel %>% group_keys() %>% pull()
-    return(gt_list.indel) 
+    return(gt_list.indel)
   }
 }
 
