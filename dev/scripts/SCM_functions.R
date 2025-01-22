@@ -1,17 +1,29 @@
-### Load libraries
-library(tidyverse)
-library(data.table)
-library(pbapply)
-library(pbmcapply)
-library(vcfR)
-library(ape)
-library(phytools)
-library(ggtree)
-library(cowplot)
-library(RColorBrewer)
-library(snow)
-library(markophylo)
-library(ggtext)
+### INSTALL/LOAD LIBRARIES ###
+
+cran_packages <- c("BiocManager", "tidyverse", "data.table",
+                    "pbapply", "pbmcapply", "vcfR",
+                    "ape", "phytools", "cowplot",
+                    "RColorBrewer", "snow", "markophylo",
+                    "ggtext")
+
+for (pkg in cran_packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg, dependencies = TRUE)
+    library(pkg, quietly = TRUE)
+  } else {
+    library(pkg, character.only = TRUE, quietly = TRUE)
+  }
+}
+
+biconductor_packages <- c("ggtree")
+for (pkg in biconductor_packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    BiocManager::install(pkg)
+    library(pkg, quietly = TRUE)
+  } else {
+    library(pkg, character.only = TRUE, quietly = TRUE)
+  }
+}
 
 #### TREE PARSING ####
 #Collapse tree edges with user-defined support thresholds
@@ -25,7 +37,7 @@ collapse_poor_supported_edges  <-  function(phylo, support_threshold_to_keep) {
 
 #### DATA PREP ####
 #Produce genotype priors from phredscore vector (PL->GP)
-unphred <- function(phredscore){
+unphred <- function(phredscore) {
   prob <- 10^(-phredscore / 10)
   prob_norm <- prob / sum(prob)
   return(prob_norm)
@@ -295,7 +307,9 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
 
         return(x)
       })
-    names(gt_list.snp) <- df.snp %>% group_keys() %>% pull()
+    names(gt_list.snp) <- df.snp %>% 
+                          group_keys() %>%
+                          pull()
 
     return(gt_list.snp)
   }
@@ -369,36 +383,38 @@ compile_gt_states.indel <- function(vcf, mat_list = TRUE) {
 }
 
 # Run simmap for a single site
-runSCM_single <- function(x,tree,gt_state_list,Qmat,reduced=F,reps=100,root_state="equal",cores=1) {
+runSCM_single <- function(x, tree, gt_state_list, 
+                          Qmat, reduced = F, reps = 100,
+                          root_state = "equal", cores = 1) {
   if (length(x) > 1){
     return(print("ERROR: >1 variant used for input"))
   }
   
   gt_matrix <- gt_state_list[[x]] %>% #Subset input to genotype priors
     select(!locus) %>%
-    column_to_rownames(var="Indiv")
+    column_to_rownames(var = "Indiv")
   
   if (reduced == T) { #Optionally, remove all genotype states without evidence of presence
     gt_matrix  <-  gt_matrix %>% 
       select(where(~sum(.) != 0))
-    Qmat <- Qmat[colnames(gt_matrix),colnames(gt_matrix)]
+    Qmat <- Qmat[colnames(gt_matrix), colnames(gt_matrix)]
   }
   
   #Prep cores and print run info
-  cl <- makeSOCKcluster(rep("localhost",cores))
-  print(paste0("Performing stochastic character mapping on ",x,"."))
-  print(paste0("Cores: ",cores))
-  print(paste0("Replicates: ",reps))
-  print(paste0("Reduced Qmatrix: ",reduced))
+  cl <- makeSOCKcluster(rep("localhost", cores))
+  print(paste0("Performing stochastic character mapping on ", x, "."))
+  print(paste0("Cores: ", cores))
+  print(paste0("Replicates: ", reps))
+  print(paste0("Reduced Qmatrix: ", reduced))
   
   #Run simmap
   scm <- clusterApply(cl,
-                    x=replicate(cores,as.matrix(gt_matrix),simplify=FALSE),
+                    x=replicate(cores,as.matrix(gt_matrix),simplify = FALSE),
                     fun=make.simmap,
                     tree=tree,
                     Q=Qmat,
                     pi=root_state,
-                    nsim=as.integer(round(reps/cores)))
+                    nsim=as.integer(round(reps / cores)))
   scm <- do.call("c",scm)
   
   #Reclass simmap if not properly classed by output above
@@ -420,15 +436,15 @@ pull_consensus_state  <-  function(row, threshold) {
 } 
 
 #Returns a vector (in same order as tree_edges, where tree_edges is <phylo>$edge) where state changes have occurred
-detect_state_changes <- function(tree_edges,states){
-  if ( is.na(states[tree_edges[1,][1]]) ){
-    return(rep(0,length(states)))
+detect_state_changes <- function(tree_edges, states){
+  if ( is.na(states[tree_edges[1, ][1]]) ){
+    return(rep(0, length(states)))
   } # If root state is uncertain, return 0's for all branches & exits loop
   root_state <- states[1] #Pull high confidence root state
   
-  apply(tree_edges,1,function(x){
+  apply(tree_edges, 1, function(x){
     while ( is.na(states[x[1]]) ) {
-      x[1]  <-  tree_edges[tree_edges[,2] == x[1]][1] # Pull the parent node to the current parent node
+      x[1]  <-  tree_edges[tree_edges[, 2] == x[1]][1] # Pull the parent node to the current parent node
     } # If parent state uncertain, assign parent state to most recent high confidence state
     
     if ( is.na(states[x[2]]) ) {
@@ -446,7 +462,8 @@ detect_state_changes <- function(tree_edges,states){
 } 
 
 #Output a summary for SNP SCM, optionally plot
-summarise_scm.snp <- function(multiSimmap,PPthreshold=0.95,plot=F,legend=T,title=NA){
+summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = F, 
+                              legend = TRUE , title = NA) {
   #load primary df from input
   scm_summary <- summary(multiSimmap) #longest step
   scm_summary <- scm_summary$ace %>% as.data.frame()
@@ -455,83 +472,89 @@ summarise_scm.snp <- function(multiSimmap,PPthreshold=0.95,plot=F,legend=T,title
   #annotate posteriors with consensus state and node numbers (renumbering tip names to node number)
   scm_summary$constate <- apply(scm_summary, 1, pull_consensus_state, threshold = PPthreshold)
   scm_summary$node <- rownames(scm_summary)
-  scm_summary[(tree$Nnode+1):nrow(scm_summary),]$node <- 1:(length(tree$tip.label))
+  scm_summary[(tree$Nnode+1):nrow(scm_summary), ]$node <- 1:(length(tree$tip.label))
   
   #pull vector of node consensus states
-  genotype_states <- arrange(scm_summary,as.integer(node)) %>% 
+  genotype_states <- arrange(scm_summary, as.integer(node)) %>% 
     pull(constate)
   
   #format state posteriors df output 
   out <- scm_summary %>% 
     arrange(as.integer(node)) %>% 
-    select(!c(node,constate))
+    select(!c(node, constate))
   rownames(out) <- NULL
-  cols_to_add <- setdiff(c("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT"),colnames(out))
+  cols_to_add <- setdiff(c("AA", "CC", "GG", "TT", "AC",
+                            "AG", "AT", "CG", "CT", "GT"), 
+                          colnames(out))
   out[,cols_to_add] = 0
   out <- out %>% 
-    select("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT")
+    select("AA", "CC", "GG", "TT", "AC",
+            "AG", "AT", "CG", "CT", "GT")
   
   #pull consensus state posteriors (in same order as out)
-  constate_posteriors <- apply(out,1,max)
+  constate_posteriors <- apply(out, 1, max)
   
   #plotting
   if ( plot == T ){
     cols <- setNames(brewer.pal(n = 10, name = "Set3"),
-                   c("AA", "CC", "GG", "TT", "AC", "AG", "AT", "CG", "CT", "GT"))
+                   c("AA", "CC", "GG", "TT", "AC",
+                      "AG", "AT", "CG", "CT", "GT"))
     plot(summary(multiSimmap),
-         type="phylogram",
-         direction="downwards",
-         colors=cols,
-         fsize=1,
-         ftype="off",
-         lwd=1,
-         #offset=0.4,
-         #ylim=c(-1,Ntip(tree)),
-         cex=c(0.25,0.25),
-         cex=c(0.5,0.5),
-         mar=c(2,0.1,2,0.1),
-         outline=F)
-    title(main=title)
+         type = "phylogram",
+         direction = "downwards",
+         colors = cols,
+         fsize = 1,
+         ftype = "off",
+         lwd = 1,
+         #offset = 0.4,
+         #ylim = c(-1, Ntip(tree)),
+         cex = c(0.25, 0.25),
+         cex = c(0.5, 0.5),
+         mar = c(2, 0.1, 2, 0.1),
+         outline = F)
+    title(main = title)
     if ( legend == T ){
       legend("bottom",
-             horiz=T,
-             xpd=T,
-             legend=c("AA", "CC", "GG", "TT", "AC", "AG", "AT", "CG", "CT", "GT"),
-             xjust=0.5,
-             yjust=0.5,
-             pch=22,
-             pt.cex=2,
-             pt.bg=cols,
-             inset=c(0,-0.02),
+             horiz = T,
+             xpd = T,
+             legend = c("AA", "CC", "GG", "TT", "AC",
+                        "AG", "AT", "CG", "CT", "GT"),
+             xjust = 0.5,
+             yjust = 0.5,
+             pch = 22,
+             pt.cex = 2,
+             pt.bg = cols,
+             inset = c(0, -0.02),
              #title.adj = 0,
-             bty="n",
-             cex=1)
+             bty = "n",
+             cex = 1)
     }
-    #add.scale.bar(length = 0.01,y=0.1,x=0)
-    add.scale.bar(length=0.01)
-    if ( sum(detect_state_changes(tree$edge,genotype_states)) > 0) {
-      edgelabels(text="",
-                 edge = which(detect_state_changes(tree$edge,genotype_states) == 1),
+    #add.scale.bar(length = 0.01, y = 0.1, x = 0)
+    add.scale.bar(length = 0.01)
+    if ( sum(detect_state_changes(tree$edge, genotype_states)) > 0) {
+      edgelabels(text = "",
+                 edge = which(detect_state_changes(tree$edge, genotype_states) == 1),
                  #col = "white",
                  #bg = "black",
-                 col="black",
-                 frame="none",
-                 pch=18,
-                 cex=1.5,
+                 col = "black",
+                 frame = "none",
+                 pch = 18,
+                 cex = 1.5,
                  #frame = "rect",
-                 adj = c(0.5,0.5))
+                 adj = c(0.5, 0.5))
     }
   }
-  
+
   #output
-  return(list("scm_summary"=out,
-              "assigned"=detect_state_changes(tree$edge,genotype_states),
-              "constate_PPs"=constate_posteriors,
-              "QlogL"=multiSimmap[[1]]$logL[1]))
+  return(list("scm_summary" = out,
+              "assigned" = detect_state_changes(tree$edge, genotype_states),
+              "constate_PPs" = constate_posteriors,
+              "QlogL" = multiSimmap[[1]]$logL[1]))
 }
 
 #Output a summary for indel SCM, optionally plot
-summarise_scm.indel <- function(multiSimmap,PPthreshold=0.95,plot=F,legend=T,title=NA){
+summarise_scm.indel <- function(multiSimmap, PPthreshold=0.95, plot = FALSE,
+                                legend = TRUE, title = NA){
   #load primary df from input
   scm_summary <- summary(multiSimmap)
   scm_summary <- scm_summary$ace %>% as.data.frame()
@@ -540,87 +563,87 @@ summarise_scm.indel <- function(multiSimmap,PPthreshold=0.95,plot=F,legend=T,tit
   #annotate posteriors with consensus state and node numbers (renumbering tip names to node number)
   scm_summary$constate <- apply(scm_summary, 1, pull_consensus_state, threshold = PPthreshold)
   scm_summary$node <- rownames(scm_summary)
-  scm_summary[(tree$Nnode+1):nrow(scm_summary),]$node <- 1:(length(tree$tip.label))
+  scm_summary[(tree$Nnode+1):nrow(scm_summary), ]$node <- 1:(length(tree$tip.label))
   
   #pull vector of node consensus states
-  genotype_states <- arrange(scm_summary,as.integer(node)) %>% 
+  genotype_states <- arrange(scm_summary, as.integer(node)) %>% 
     pull(constate)
   
   #format state posteriors df output 
   out <- scm_summary %>% 
     arrange(as.integer(node)) %>% 
-    select(!c(node,constate))
+    select(!c(node, constate))
   rownames(out) <- NULL
-  cols_to_add <- setdiff(c("REF","HET","ALT"),colnames(out))
+  cols_to_add <- setdiff(c("REF", "HET", "ALT"), colnames(out))
   out[,cols_to_add] = 0
   out <- out %>% 
-    select("REF","HET","ALT")
+    select("REF", "HET", "ALT")
   
   #pull consensus state posteriors (in same order as out)
-  constate_posteriors <- apply(out,1,max)
+  constate_posteriors <- apply(out, 1, max)
   
   #plotting
-  if ( plot == T ){
-    cols <- setNames(c("gray","royalblue","tomato"),
-                   c("REF","HET","ALT"))
+  if ( plot == TRUE ){
+    cols <- setNames(c("gray", "royalblue", "tomato"),
+                   c("REF", "HET", "ALT"))
     plot(summary(multiSimmap),
-         type="phylogram",
-         direction="downwards",
-         colors=cols,
-         fsize=1,
-         ftype="off",
-         lwd=1,
+         type = "phylogram",
+         direction = "downwards",
+         colors = cols,
+         fsize = 1,
+         ftype = "off",
+         lwd = 1,
          #offset=0.4,
          #ylim=c(-1,Ntip(tree)),
-         cex=c(0.25,0.25),
-         cex=c(0.5,0.5),
-         mar=c(2,0.1,2,0.1),
-         outline=F)
-    title(main=title)
-    if ( legend == T ){
+         cex = c(0.25, 0.25),
+         cex = c(0.5, 0.5),
+         mar = c(2, 0.1, 2, 0.1),
+         outline = FALSE)
+    title(main = title)
+    if ( legend == TRUE ){
       legend("bottom",
-             horiz=T,
-             xpd=T,
-             legend=c("0/0","0/1","1/1"),
-             xjust=0.5,
-             yjust=0.5,
-             pch=22,
-             pt.cex=2,
-             pt.bg=cols,
-             inset=c(0,-0.02),
+             horiz = TRUE,
+             xpd = TRUE,
+             legend = c("0/0", "0/1", "1/1"),
+             xjust = 0.5,
+             yjust = 0.5,
+             pch = 22,
+             pt.cex = 2,
+             pt.bg = cols,
+             inset = c(0, -0.02),
              #title.adj = 0,
-             bty="n",
-             cex=1)
+             bty = "n",
+             cex = 1)
     }
-    #add.scale.bar(length = 0.01,y=0.1,x=0)
-    add.scale.bar(length=0.01)
-    if ( sum(detect_state_changes(tree$edge,genotype_states)) > 0) {
-      edgelabels(text="",
-                 edge = which(detect_state_changes(tree$edge,genotype_states) == 1),
+    #add.scale.bar(length = 0.01, y = 0.1, x = 0)
+    add.scale.bar(length = 0.01)
+    if ( sum(detect_state_changes(tree$edge, genotype_states)) > 0) {
+      edgelabels(text = "",
+                 edge = which(detect_state_changes(tree$edge, genotype_states) == 1),
                  #col = "white",
                  #bg = "black",
-                 col="black",
-                 frame="none",
-                 pch=18,
-                 cex=1.5,
+                 col = "black",
+                 frame = "none",
+                 pch = 18,
+                 cex = 1.5,
                  #frame = "rect",
-                 adj = c(0.5,0.5))
+                 adj = c(0.5, 0.5))
     }
   }
   
   #output
-  return(list("scm_summary"=out,
-              "assigned"=detect_state_changes(tree$edge,genotype_states),
-              "constate_PPs"=constate_posteriors,
-              "QlogL"=multiSimmap[[1]]$logL[1]))
+  return(list("scm_summary" = out,
+              "assigned" = detect_state_changes(tree$edge, genotype_states),
+              "constate_PPs" = constate_posteriors,
+              "QlogL" = multiSimmap[[1]]$logL[1]))
 }
 
 #Read indel model from compile_gt_states.indel output
-generate_indel_model <- function(indel_state_list,tree,cores=4){
+generate_indel_model <- function(indel_state_list, tree, cores = 4){
   print("Constructing indel character-state matrix...")
-  indel.states <- pbmclapply(indel_state_list,mc.cores = cores,function(x){
+  indel.states <- pbmclapply(indel_state_list, mc.cores = cores, function(x) {
     x <- x %>% 
-      select(2,3,4,5) %>% 
+      select(2, 3, 4, 5) %>% 
       as.data.frame() 
     x <- x %>%
       rowwise() %>%
@@ -637,7 +660,7 @@ generate_indel_model <- function(indel_state_list,tree,cores=4){
       ungroup() %>%
       select(-max_value) %>% 
       as.data.frame() %>%
-      column_to_rownames(var="Indiv")
+      column_to_rownames(var = "Indiv")
     char.c <- x$state
     names(char.c) <- rownames(x)
     return(char.c)
@@ -649,21 +672,23 @@ generate_indel_model <- function(indel_state_list,tree,cores=4){
   print("Fitting parameters...")
   rate <- estimaterates(usertree = tree,
                       userphyl = indel.states,
-                      matchtipstodata = T,
-                      alphabet=c("REF","HET","ALT"),
-                      modelmat = matrix(c(NA,1,0,
-                                          1,NA,1,
-                                          0,1,NA),
-                                        nrow=3,ncol=3),
+                      matchtipstodata = TRUE,
+                      alphabet = c("REF", "HET", "ALT"),
+                      modelmat = matrix(c(NA, 1, 0,
+                                          1, NA, 1,
+                                          0, 1, NA),
+                                        nrow = 3,
+                                        ncol = 3),
                       rootprob = "maxlik",
                       numhessian = F)
   
-  indel.q <- matrix(c((-1*rate$results$wop$par[1]),rate$results$wop$par[1],0.001,
-                    rate$results$wop$par[1],(-2*(rate$results$wop$par[1])),rate$results$wop$par[1],
-                    0.001,rate$results$wop$par[1],(-1*rate$results$wop$par[1])),
-                  nrow=3,ncol=3)
-  rownames(indel.q) <- c("REF","HET","ALT")
-  colnames(indel.q) <- c("REF","HET","ALT")
+  indel.q <- matrix(c((-1 * rate$results$wop$par[1]), rate$results$wop$par[1], 0.001,
+                        rate$results$wop$par[1], (-2 * (rate$results$wop$par[1])), rate$results$wop$par[1],
+                        0.001, rate$results$wop$par[1], (-1 * rate$results$wop$par[1])),
+                    nrow = 3, 
+                    ncol = 3)
+  rownames(indel.q) <- c("REF", "HET", "ALT")
+  colnames(indel.q) <- c("REF", "HET", "ALT")
   return(indel.q)
 }
 
@@ -675,127 +700,132 @@ plot_density_hist.indel <- function(multiSimmap_density){
   }
   
   #Extract plotting data from density() output, class = "changesMap"
-  trans <- c("REF->HET","ALT->HET",
-           "HET->REF","HET->ALT")
+  trans <- c("REF->HET", "ALT->HET",
+           "HET->REF", "HET->ALT")
   
   #Density data
-  df.dens <- lapply(trans,function(x){
+  df.dens <- lapply(trans, function(x) {
     if (! x %in% multiSimmap_density$trans) {
-      df <- data.frame(state_trans=x,
-                     num_trans=0,
-                     count=NA,
-                     density=1.0)
+      df <- data.frame(state_trans = x,
+                     num_trans = 0,
+                     count = NA,
+                     density = 1.0)
     } else {
-      df <- data.frame(state_trans=x,
-                     num_trans=multiSimmap_density$p[[x]]$mids,
-                     count=multiSimmap_density$p[[x]]$counts,
-                     density=multiSimmap_density$p[[x]]$density)
+      df <- data.frame(state_trans = x,
+                     num_trans = multiSimmap_density$p[[x]]$mids,
+                     count = multiSimmap_density$p[[x]]$counts,
+                     density = multiSimmap_density$p[[x]]$density)
     }
     return(df)
   }) %>% bind_rows()
-  df.dens$state_trans <- factor(df.dens$state_trans,levels=trans)
-  df.dens  <-  df.dens %>% 
-    mutate(allele_cat=case_when(state_trans %in% c("REF->HET","HET->REF") ~ as.factor("Homozygous ref."),
-                                state_trans %in% c("ALT->HET","HET->ALT") ~ as.factor("Homozygous alt.")),
-           heterozygosity=case_when(state_trans %in% c("REF->HET","ALT->HET") ~ as.factor("gain"),
-                                    state_trans %in% c("HET->REF","HET->ALT") ~ as.factor("loss")))
+  df.dens$state_trans <- factor(df.dens$state_trans, levels = trans)
+  df.dens <- df.dens %>% 
+    mutate(allele_cat = case_when(state_trans %in% c("REF->HET", "HET->REF") ~ as.factor("Homozygous ref."),
+                                state_trans %in% c("ALT->HET", "HET->ALT") ~ as.factor("Homozygous alt.")),
+           heterozygosity = case_when(state_trans %in% c("REF->HET", "ALT->HET") ~ as.factor("gain"),
+                                    state_trans %in% c("HET->REF", "HET->ALT") ~ as.factor("loss")))
   
   #HPD data
-  df.hpd <- lapply(trans,function(x){
+  df.hpd <- lapply(trans, function(x) {
     if (! x %in% multiSimmap_density$trans) {
-      df <- data.frame(state_trans=x,
-                     low=0,
-                     high=0)
+      df <- data.frame(state_trans = x,
+                     low = 0,
+                     high = 0)
     } else {
-      df <- data.frame(state_trans=x,
-                     low=multiSimmap_density$hpd[[x]][1],
-                     high=multiSimmap_density$hpd[[x]][2])
+      df <- data.frame(state_trans = x,
+                     low = multiSimmap_density$hpd[[x]][1],
+                     high = multiSimmap_density$hpd[[x]][2])
     }
     return(df)
   }) %>% bind_rows()
-  df.hpd$state_trans <- factor(df.hpd$state_trans,levels=trans)
-  df.hpd  <-  df.hpd %>% 
-    mutate(allele_cat=case_when(state_trans %in% c("REF->HET","HET->REF") ~ as.factor("Homozygous ref."),
-                                state_trans %in% c("ALT->HET","HET->ALT") ~ as.factor("Homozygous alt.")),
-           heterozygosity=case_when(state_trans %in% c("REF->HET","ALT->HET") ~ as.factor("gain"),
-                                    state_trans %in% c("HET->REF","HET->ALT") ~ as.factor("loss")),
+  df.hpd$state_trans <- factor(df.hpd$state_trans, levels = trans)
+  df.hpd <- df.hpd %>% 
+    mutate(allele_cat = case_when(state_trans %in% c("REF->HET", "HET->REF") ~ as.factor("Homozygous ref."),
+                                state_trans %in% c("ALT->HET", "HET->ALT") ~ as.factor("Homozygous alt.")),
+           heterozygosity = case_when(state_trans %in% c("REF->HET", "ALT->HET") ~ as.factor("gain"),
+                                    state_trans %in% c("HET->REF", "HET->ALT") ~ as.factor("loss")),
            med=((low+high)/2))
   
-  df.hpd  <-  df.dens %>% 
+  df.hpd <- df.dens %>% 
     group_by(state_trans) %>% 
-    select(state_trans,density) %>% 
-    summarise(max_den=max(density)) %>%
-    mutate(max_den = max_den+0.05) %>%
-    right_join(df.hpd,by="state_trans")
+    select(state_trans, density) %>% 
+    summarise(max_den = max(density)) %>%
+    mutate(max_den = max_den + 0.05) %>%
+    right_join(df.hpd, by = "state_trans")
   
   #Additional annotations for plot
-  annotations <- data.frame(lab=c("gain of het.","loss of het."),
-                          allele_cat=factor("Homozygous alt.",levels=c("Homozygous ref.","Homozygous alt.")),
-                          count=max(df.dens$num_trans),
-                          density=c(0.5,-0.5))
-  annotations2 <- data.frame(lab=c("Homozygous ref.","Homozygous alt."),
-                           allele_cat=factor(c("Homozygous ref.","Homozygous alt."),levels=c("Homozygous ref.","Homozygous alt.")),
-                           y=1.2,
-                           x=df.dens %>% pull(num_trans) %>% max()/2)
+  annotations <- data.frame(lab = c("gain of het.", "loss of het."),
+                            allele_cat = factor("Homozygous alt.",
+                            levels = c("Homozygous ref.", "Homozygous alt.")),
+                            count = max(df.dens$num_trans),
+                            density = c(0.5, -0.5))
+  annotations2 <- data.frame(lab = c("Homozygous ref.", "Homozygous alt."),
+                            allele_cat = factor(c("Homozygous ref.", "Homozygous alt."),
+                            levels = c("Homozygous ref.", "Homozygous alt.")),
+                            y = 1.2,
+                            x = df.dens %>% pull(num_trans) %>% max() / 2)
   # generations <- sum(scm.density$p[[1]]$counts)
   
   #Plot
-  par(mfrow=c(1,1),ask=F)
+  par(mfrow=c(1,1), ask = FALSE)
   g <- ggplot(data = df.dens %>% filter(heterozygosity == "gain"),
-            mapping = aes(x=num_trans,y=density))+
-    geom_col(mapping=aes(fill=state_trans),
-             position="identity",
-             width=0.95)+
+            mapping = aes(x = num_trans, y = density))+
+    geom_col(mapping = aes(fill = state_trans),
+             position = "identity",
+             width = 0.95)+
     geom_col(data = df.dens %>% filter(heterozygosity == "loss"),
-             mapping = aes(x=num_trans,y=-1*density,fill=state_trans),
-             position="identity",
-             width=0.95)+
-    geom_hline(yintercept=0,linewidth=0.5,color="white")+
-    geom_text(data=annotations,
-              mapping=aes(label=lab,x=count,y=density,color=lab),
-              fontface="bold",
-              angle=-90,
-              hjust=0.5,
+             mapping = aes(x = num_trans, y = -1 * density, fill = state_trans),
+             position = "identity",
+             width = 0.95)+
+    geom_hline(yintercept = 0,linewidth = 0.5,color = "white")+
+    geom_text(data = annotations,
+              mapping = aes(label = lab, x = count, y = density, color = lab),
+              fontface = "bold",
+              angle = -90,
+              hjust = 0.5,
               nudge_x = 1,
-              color=c("gray70","gray30"),
-              size=5)+
-    geom_text(data=annotations2,
-              mapping=aes(x=x,y=y,label=lab),
-              hjust=0.5,
-              vjust=0.5,
-              fontface="bold",
-              color=c("royalblue","salmon"),
-              size=5)+
-    geom_segment(data=df.hpd %>% filter(heterozygosity == "gain"),
-                 mapping=aes(y=max_den,yend=max_den,x=low-0.5,xend=high+0.5),
-                 color="black")+
-    geom_segment(data=df.hpd %>% filter(heterozygosity == "loss"),
-                 mapping=aes(y=-max_den,yend=-max_den,x=low-0.5,xend=high+0.5),
-                 color="black")+
-    geom_text(data=df.hpd %>% filter(heterozygosity == "gain"),
-              mapping=aes(y=max_den+0.075,x=med),
-              color="black",
-              hjust=0.5,
-              label="95% HPD")+
-    geom_text(data=df.hpd %>% filter(heterozygosity == "loss"),
-              mapping=aes(y=-max_den-0.075,x=med),
-              color="black",
-              hjust=0.5,
-              label="95% HPD")+
-    facet_wrap(~allele_cat,ncol=2) +
-    scale_x_continuous(limits=c(min(df.dens$num_trans),max(df.dens$num_trans)+1),
-                       breaks=seq(0,max(df.dens$num_trans),2)) +
-    scale_y_continuous(limits=c(-1.2,1.2),breaks=seq(-1,1,0.2),
-                       labels=c(rev(seq(0,1,0.2)),seq(0.2,1,0.2))) +
-    scale_fill_manual(values=c("royalblue","salmon","royalblue4","salmon4"),guide="none")+
+              color = c("gray70", "gray30"),
+              size = 5)+
+    geom_text(data = annotations2,
+              mapping = aes(x = x, y = y, label = lab),
+              hjust = 0.5,
+              vjust = 0.5,
+              fontface = "bold",
+              color = c("royalblue", "salmon"),
+              size = 5)+
+    geom_segment(data = df.hpd %>% filter(heterozygosity == "gain"),
+                 mapping = aes(y = max_den, yend = max_den, 
+                                x = low - 0.5, xend = high + 0.5),
+                 color = "black")+
+    geom_segment(data = df.hpd %>% filter(heterozygosity == "loss"),
+                 mapping = aes(y = -max_den, yend = -max_den,
+                                x = low - 0.5, xend = high + 0.5),
+                 color = "black")+
+    geom_text(data = df.hpd %>% filter(heterozygosity == "gain"),
+              mapping = aes(y = max_den + 0.075, x = med),
+              color = "black",
+              hjust = 0.5,
+              label = "95% HPD")+
+    geom_text(data = df.hpd %>% filter(heterozygosity == "loss"),
+              mapping = aes(y = -1 * (max_den + 0.075), x = med),
+              color = "black",
+              hjust = 0.5,
+              label = "95% HPD")+
+    facet_wrap(~allele_cat, ncol=2) +
+    scale_x_continuous(limits = c(min(df.dens$num_trans), max(df.dens$num_trans) + 1),
+                       breaks = seq(0, max(df.dens$num_trans), 2)) +
+    scale_y_continuous(limits = c(-1.2, 1.2), breaks=seq(-1, 1, 0.2),
+                       labels = c(rev(seq(0, 1, 0.2)), seq(0.2, 1, 0.2))) +
+    scale_fill_manual(values = c("royalblue", "salmon", "royalblue4", "salmon4"), guide="none")+
     theme_cowplot() +
-    theme(strip.text=element_blank(),
-          strip.background=element_blank(),
-          plot.title=element_text(face="bold",hjust=0.5),
-          plot.subtitle=element_text(face="italic",hjust=0.5),
+    theme(strip.text = element_blank(),
+          strip.background = element_blank(),
+          plot.title = element_text(face = "bold", hjust = 0.5),
+          plot.subtitle = element_text(face = "italic", hjust = 0.5),
           axis.line.y = element_line()) +
     labs(x="mutations (count)",
          y="density")
   suppressWarnings(print(g))
-  return(list("densities"=df.dens %>% select(-allele_cat,-heterozygosity),"hpd95"=df.hpd %>% select(-allele_cat,-heterozygosity,-med,-max_den)))
+  return(list("densities" = df.dens %>% select(-allele_cat, -heterozygosity),
+              "hpd95" = df.hpd %>% select(-allele_cat, -heterozygosity, -med, -max_den)))
 }
