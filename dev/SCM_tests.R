@@ -1,20 +1,20 @@
-source("scripts/SCM_functions.R")
+source("dev/scripts/SCM_functions.R")
 
 ##### Data import #####
 #Read tree
-tr<-read.tree(file="trees/DH.phylogenetic_sites.synthetic_reference.vcf.cellphy.raxml.supportFBP") %>%
+tr<-read.tree(file="dev/data/DH.phylogenetic_sites.synthetic_reference.vcf.cellphy.raxml.supportFBP") %>%
   root(outgroup="DH",resolve.root = T) %>% 
   drop.tip("DH") %>%
   ladderize()
 #tree<-collapse_poor_supported_edges(tree,90)
 
 #Read vcf
-vcf<-read.vcfR("vcfs/DH.filtered.06282024.curated.funcotated.vcf.gz")
+vcf<-read.vcfR("dev/data/DH.filtered.06282024.curated.funcotated.vcf.gz")
 gt_list.snp<-compile_gt_states.snp(vcf)
 gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
-snp.q<-read_cellphy_model(bestModel_path = "models/DH.phylogenetic_sites.synthetic_reference.vcf.cellphy.raxml.bestModel")
+snp.q<-read_cellphy_model(bestModel_path = "dev/data/DH.phylogenetic_sites.synthetic_reference.vcf.cellphy.raxml.bestModel")
 indel.q<-generate_indel_model(indel_state_list = gt_list.indel,tree=tr)
 
 ##### SCM SNPS #####

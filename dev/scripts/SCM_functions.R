@@ -14,8 +14,8 @@ library(markophylo)
 library(ggtext)
 
 #### TREE PARSING ####
-#Collapse edges with user-defined support thresholds
-collapse_poor_supported_edges  <-  function(phylo, support_threshold_to_keep){
+#Collapse tree edges with user-defined support thresholds
+collapse_poor_supported_edges  <-  function(phylo, support_threshold_to_keep) {
   nodes <- phylo$node %>% as.integer()
   badnodes <- which(nodes < support_threshold_to_keep) + length(phylo$tip.label)
   collapsed <- CollapseNode(phylo, badnodes)
@@ -24,213 +24,210 @@ collapse_poor_supported_edges  <-  function(phylo, support_threshold_to_keep){
 }
 
 #### DATA PREP ####
-
-#Produce probabilities from phredscore vector (PL->GP)
+#Produce genotype priors from phredscore vector (PL->GP)
 unphred <- function(phredscore){
-  prob <- 10^(-phredscore/10)
-  prob_norm <- prob/sum(prob)
+  prob <- 10^(-phredscore / 10)
+  prob_norm <- prob / sum(prob)
   return(prob_norm)
 }
 
-#Read Q matrix from CellPhy *.bestModel output
+#Read somatic SNP Q matrix from CellPhy *.bestModel output
 read_cellphy_model <- function(bestModel_path) {
-  RateCats <- c("Zero","AC","AG","AT","CG","CT","GT")
-  States <- c("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT")
-  
+  RateCats <- c("Zero", "AC", "AG", "AT", "CG", "CT", "GT")
+  States <- c("AA", "CC", "GG", "TT", "AC", "AG", "AT", "CG", "CT", "GT")
+
   #Read bestmodel file
-  txt <- read_file(file=as.character(bestModel_path))
-  #print(txt)
-  
+  txt <- read_file(file = as.character(bestModel_path))
+
   #Digest rates matrix
   Rates <- txt %>%
-    str_split(pattern="\\+") %>%
-    purrr::map(.,1) %>%
+    str_split(pattern = "\\+") %>%
+    purrr::map(., 1) %>%
     unlist() %>%
-    str_remove_all(pattern="GT10") %>%
-    str_remove_all(pattern="[{}]") %>%
-    str_split(pattern="/") %>%
+    str_remove_all(pattern = "GT10") %>%
+    str_remove_all(pattern = "[{}]") %>%
+    str_split(pattern = "/") %>%
     unlist() %>%
     as.numeric()
   names(Rates) <- RateCats
-  
+
   alpha <- Rates["AC"]
   beta <- Rates["AG"]
   gamma <- Rates["AT"]
   kappa <- Rates["CG"]
   lambda <- Rates["CT"]
   mu <- Rates["GT"]
-  #print(Rates)
-  
+
   #Digest state frequencies matrix
   Freq <- txt %>%
-    str_split(pattern="\\+") %>%
-    purrr::map(.,2) %>%
+    str_split(pattern = "\\+") %>%
+    purrr::map(., 2) %>%
     unlist() %>%
-    str_remove_all(pattern="FU") %>%
-    gsub("\\}.*","",.) %>%
-    str_remove_all(pattern="\\{") %>%
-    str_split(pattern="/") %>%
+    str_remove_all(pattern = "FU") %>%
+    gsub("\\}.*", "", .) %>%
+    str_remove_all(pattern = "\\{") %>%
+    str_split(pattern = "/") %>%
     unlist() %>%
     as.numeric()
   names(Freq) <- States
-  #print(Freq)
-  
+
   #Generate matrix columns c("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT")
   AAvec <- c(NA,
-           Rates["Zero"],
-           Rates["Zero"],
-           Rates["Zero"],
-           alpha*Freq["AA"],
-           beta*Freq["AA"],
-           gamma*Freq["AA"],
-           Rates["Zero"],
-           Rates["Zero"],
-           Rates["Zero"])
+          Rates["Zero"],
+          Rates["Zero"],
+          Rates["Zero"],
+          alpha * Freq["AA"],
+          beta * Freq["AA"],
+          gamma * Freq["AA"],
+          Rates["Zero"],
+          Rates["Zero"],
+          Rates["Zero"])
   AAvec <- unname(AAvec)
-  
+
   CCvec <- c(Rates["Zero"],
-           NA,
-           Rates["Zero"],
-           Rates["Zero"],
-           alpha*Freq["CC"],
-           Rates["Zero"],
-           Rates["Zero"],
-           kappa*Freq["CC"],
-           lambda*Freq["CC"],
-           Rates["Zero"])
+          NA,
+          Rates["Zero"],
+          Rates["Zero"],
+          alpha * Freq["CC"],
+          Rates["Zero"],
+          Rates["Zero"],
+          kappa * Freq["CC"],
+          lambda * Freq["CC"],
+          Rates["Zero"])
   CCvec <- unname(CCvec)
-  
+
   GGvec <- c(Rates["Zero"],
-           Rates["Zero"],
-           NA,
-           Rates["Zero"],
-           Rates["Zero"],
-           beta*Freq["GG"],
-           Rates["Zero"],
-           kappa*Freq["GG"],
-           Rates["Zero"],
-           mu*Freq["GG"])
+          Rates["Zero"],
+          NA,
+          Rates["Zero"],
+          Rates["Zero"],
+          beta * Freq["GG"],
+          Rates["Zero"],
+          kappa * Freq["GG"],
+          Rates["Zero"],
+          mu * Freq["GG"])
   GGvec <- unname(GGvec)
-  
+
   TTvec <- c(Rates["Zero"],
-           Rates["Zero"],
-           Rates["Zero"],
-           NA,
-           Rates["Zero"],
-           Rates["Zero"],
-           gamma*Freq["TT"],
-           Rates["Zero"],
-           lambda*Freq["TT"],
-           mu*Freq["TT"])
+          Rates["Zero"],
+          Rates["Zero"],
+          NA,
+          Rates["Zero"],
+          Rates["Zero"],
+          gamma * Freq["TT"],
+          Rates["Zero"],
+          lambda * Freq["TT"],
+          mu * Freq["TT"])
   TTvec <- unname(TTvec)
-  
-  ACvec <- c(alpha*Freq["AC"],
-           alpha*Freq["AC"],
-           Rates["Zero"],
-           Rates["Zero"],
-           NA,
-           kappa*Freq["AC"],
-           lambda*Freq["AC"],
-           beta*Freq["AC"],
-           gamma*Freq["AC"],
-           Rates["Zero"])
+
+  ACvec <- c(alpha * Freq["AC"],
+          alpha * Freq["AC"],
+          Rates["Zero"],
+          Rates["Zero"],
+          NA,
+          kappa * Freq["AC"],
+          lambda * Freq["AC"],
+          beta * Freq["AC"],
+          gamma * Freq["AC"],
+          Rates["Zero"])
   ACvec <- unname(ACvec)
-  
-  AGvec <- c(beta*Freq["AG"],
-           Rates["Zero"],
-           beta*Freq["AG"],
-           Rates["Zero"],
-           kappa*Freq["AG"],
-           NA,
-           mu*Freq["AG"],
-           alpha*Freq["AG"],
-           Rates["Zero"],
-           gamma*Freq["AG"])
+
+  AGvec <- c(beta * Freq["AG"],
+          Rates["Zero"],
+          beta * Freq["AG"],
+          Rates["Zero"],
+          kappa * Freq["AG"],
+          NA,
+          mu * Freq["AG"],
+          alpha * Freq["AG"],
+          Rates["Zero"],
+          gamma * Freq["AG"])
   AGvec <- unname(AGvec)
-  
-  ATvec <- c(gamma*Freq["AT"],
-           Rates["Zero"],
-           Rates["Zero"],
-           gamma*Freq["AT"],
-           lambda*Freq["AT"],
-           mu*Freq["AT"],
-           NA,
-           Rates["Zero"],
-           alpha*Freq["AT"],
-           beta*Freq["AT"])
+
+  ATvec <- c(gamma * Freq["AT"],
+          Rates["Zero"],
+          Rates["Zero"],
+          gamma * Freq["AT"],
+          lambda * Freq["AT"],
+          mu * Freq["AT"],
+          NA,
+          Rates["Zero"],
+          alpha * Freq["AT"],
+          beta * Freq["AT"])
   ATvec <- unname(ATvec)
-  
   CGvec <- c(Rates["Zero"],
-           kappa*Freq["CG"],
-           kappa*Freq["CG"],
-           Rates["Zero"],
-           beta*Freq["CG"],
-           alpha*Freq["CG"],
-           Rates["Zero"],
-           NA,
-           mu*Freq["CG"],
-           lambda*Freq["CG"])
+          kappa * Freq["CG"],
+          kappa * Freq["CG"],
+          Rates["Zero"],
+          beta * Freq["CG"],
+          alpha * Freq["CG"],
+          Rates["Zero"],
+          NA,
+          mu * Freq["CG"],
+          lambda * Freq["CG"])
   CGvec <- unname(CGvec)
-  
+
   CTvec <- c(Rates["Zero"],
-           lambda*Freq["CT"],
-           Rates["Zero"],
-           lambda*Freq["CT"],
-           gamma*Freq["CT"],
-           Rates["Zero"],
-           alpha*Freq["CT"],
-           mu*Freq["CT"],
-           NA,
-           kappa*Freq["CT"])
+          lambda * Freq["CT"],
+          Rates["Zero"],
+          lambda * Freq["CT"],
+          gamma * Freq["CT"],
+          Rates["Zero"],
+          alpha * Freq["CT"],
+          mu * Freq["CT"],
+          NA,
+          kappa * Freq["CT"])
   CTvec <- unname(CTvec)
-  
+
   GTvec <- c(Rates["Zero"],
-           Rates["Zero"],
-           mu*Freq["GT"],
-           mu*Freq["GT"],
-           Rates["Zero"],
-           gamma*Freq["GT"],
-           beta*Freq["GT"],
-           lambda*Freq["GT"],
-           kappa*Freq["GT"],
-           NA)
+          Rates["Zero"],
+          mu * Freq["GT"],
+          mu * Freq["GT"],
+          Rates["Zero"],
+          gamma * Freq["GT"],
+          beta * Freq["GT"],
+          lambda * Freq["GT"],
+          kappa * Freq["GT"],
+          NA)
   GTvec <- unname(GTvec)
-  
-  Q <- matrix(c(AAvec,CCvec,GGvec,TTvec,ACvec,AGvec,ATvec,CGvec,CTvec,GTvec),nrow = 10,ncol = 10,byrow = F)
-  Q[1,1] <- sum(Q[1,],na.rm = T)*-1
-  Q[2,2] <- sum(Q[2,],na.rm = T)*-1
-  Q[3,3] <- sum(Q[3,],na.rm = T)*-1
-  Q[4,4] <- sum(Q[4,],na.rm = T)*-1
-  Q[5,5] <- sum(Q[5,],na.rm = T)*-1
-  Q[6,6] <- sum(Q[6,],na.rm = T)*-1
-  Q[7,7] <- sum(Q[7,],na.rm = T)*-1
-  Q[8,8] <- sum(Q[8,],na.rm = T)*-1
-  Q[9,9] <- sum(Q[9,],na.rm = T)*-1
-  Q[10,10] <- sum(Q[10,],na.rm = T)*-1
-  
+
+  Q <- matrix(c(AAvec, CCvec, GGvec, TTvec, ACvec,
+                AGvec, ATvec, CGvec, CTvec, GTvec),
+              nrow = 10, ncol = 10, byrow = FALSE)
+  Q[1, 1] <- sum(Q[1, ], na.rm = TRUE) * -1
+  Q[2, 2] <- sum(Q[2, ], na.rm = TRUE) * -1
+  Q[3, 3] <- sum(Q[3, ], na.rm = TRUE) * -1
+  Q[4, 4] <- sum(Q[4, ], na.rm = TRUE) * -1
+  Q[5, 5] <- sum(Q[5, ], na.rm = TRUE) * -1
+  Q[6, 6] <- sum(Q[6, ], na.rm = TRUE) * -1
+  Q[7, 7] <- sum(Q[7, ], na.rm = TRUE) * -1
+  Q[8, 8] <- sum(Q[8, ], na.rm = TRUE) * -1
+  Q[9, 9] <- sum(Q[9, ], na.rm = TRUE) * -1
+  Q[10, 10] <- sum(Q[10, ], na.rm = TRUE) * -1
+
   colnames(Q) <- States
   rownames(Q) <- States
-  
-  return(Q)
-} 
 
-#Read a vcf and generate a genotype probability matrix for each SNP site
-compile_gt_states.snp <- function(vcf,mat_list=TRUE){
+  return(Q)
+}
+
+#Read a vcf and generate a genotype probability matrix for each SNP
+compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   print("Reading vcf data...")
   tidy_vcf <- vcfR2tidy(vcf,
-                      gt_column_prepend="",
-                      allele.sep = ",",
-                      format_fields=c("GT","GQ","PL"))
+                        gt_column_prepend = "",
+                        allele.sep = ",",
+                        format_fields = c("GT", "GQ", "PL"))
   df <- left_join(tidy_vcf$gt,
-                tidy_vcf$fix %>%
-                  select(ChromKey,CHROM) %>%
-                  unique(),
-                by="ChromKey") %>%
-    select(CHROM,POS,Indiv,GT,GQ,PL)
+                  tidy_vcf$fix %>%
+                    select(ChromKey, CHROM) %>%
+                    unique(),
+                by = "ChromKey") %>%
+    select(CHROM, POS, Indiv, GT, GQ, PL)
   df <- left_join(df,
-                tidy_vcf$fix %>%
-                  select(CHROM,POS,REF,ALT,AC,AF),
-                by=c("CHROM","POS"))
+                  tidy_vcf$fix %>%
+                    select(CHROM, POS, REF, ALT, AC, AF),
+                  by = c("CHROM", "POS"))
   
   print("Computing genotype probabilities...")
   df <- df %>% 
