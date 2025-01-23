@@ -118,8 +118,3 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
   theme(strip.background = element_blank(),
         strip.text = element_text(face = "bold"),
         plot.title = element_text(hjust = 0.5, face = "bold"))
-
-#### TODO ####
-#Write method to compose results into a summary data frame and the posterior estimates into an HDF5-compatible array.
-#Summary output should have the following data:
-#c("locus","root","derived","n_state_changes","class","logL_Q","edge_profile")

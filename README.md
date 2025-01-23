@@ -10,6 +10,7 @@
   - [5. Tutorial](#5-tutorial)
     - [5.1 CLI interface:](#51-cli-interface)
     - [5.2 `R` interface:](#52-r-interface)
+  - [6. To-do:](#6-to-do)
  
 ## 1. About
 This repository contains the tools for inferring the evolution of somatic mutations given an underlying phylogenetic hypothesis. 
@@ -40,3 +41,15 @@ This repository contains the tools for inferring the evolution of somatic mutati
 ### 5.2 `R` interface:
 
 *WIP*
+
+## 6. To-do:
+
+ 1. Consolidate SCM SNP and indel functions into a single function 
+     that can handle both SNP and indel data (data ingress, data 
+     processing, and data summary).
+ 2. Add HPD intervals to SCM summary plots.
+ 3. Update software to handle multiple loci in a single run.
+ 4. Write a CLI wrapper for SCM.
+ 5. Write function that will consolidate all output into an HDF5 file.
+     - Summary output should have the following data:
+       `c("locus","root","derived","n_state_changes","class","logL_Q","edge_profile")`
