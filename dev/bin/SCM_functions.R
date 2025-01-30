@@ -14,10 +14,10 @@ for (pkg in cran_packages) {
   }
 }
 
-biconductor_packages <- c("ggtree")
+biconductor_packages <- c("ggtree","rhdf5")
 for (pkg in biconductor_packages) {
   if (!require(pkg, character.only = TRUE)) {
-    BiocManager::install(pkg)
+    BiocManager::install(pkg, dependencies = TRUE)
     library(pkg, quietly = TRUE)
   } else {
     library(pkg, character.only = TRUE, quietly = TRUE)
@@ -625,19 +625,32 @@ runSCM_single <- function(x, tree, gt_state_list,
 }
 
 #* Output a summary for SNP SCM, optionally plot
-summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = FALSE,
-                              legend = TRUE , title = NA) {
+summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
+                              plot = FALSE, legend = TRUE, title = NA) {
   # ARGUMENTS:
   #   - multiSimmap:
-  #       Output from runSCM_single()
+  #       multiSimmap; Output from runSCM_single()
+  #   - locus:
+  #       String; name of locus for which SCM was run
   #   - PPthreshold:
-  #       Genotype state posterior threshold for confident state call
+  #       Numeric; Genotype state posterior threshold for confident state call
   #   - plot:
   #       Boolean; set TRUE to generate plot summary of multiSimmap
   #   - legend:
   #       Boolean; set TRUE to add genotype state legend to plot
   #   - title:
   #       String; title for plot.
+
+  # Check vital inputs
+  if (missing(locus)) {
+    stop("ERROR: 'locus' string must be provided.")
+  }
+  if (missing(multiSimmap)) {
+    stop("ERROR: 'multiSimmap' object must be provided.")
+  }
+  if (!inherits(multiSimmap, "multiSimmap")) {
+    stop("ERROR: 'multiSimmap' object must be of class 'multiSimmap'.")
+  }
 
   print("Summarising SCMs...")
 
@@ -734,7 +747,8 @@ summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = FALSE,
                 return(row)
               }
             }) %>%
-            bind_rows()
+            bind_rows() %>% 
+            as.data.frame()
 
   # Plotting
   if (plot == TRUE) {
@@ -791,21 +805,23 @@ summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = FALSE,
   }
 
   # Return a list containing:
-  #   1. scm_summary:
+  #   1. locus name
+  #   2. scm_summary:
   #       Dataframe of genotype state posteriors
-  #   2. assigned:
+  #   3. assigned:
   #       Binary vector of whether a character state change occurred
   #       and reported in same order as <phylo>$edge.length
-  #   3. constate_PPs:
+  #   4. constate_PPs:
   #       Posterior estimate for each node/tip (in node order)
-  #   4. QloGL:
+  #   5. QloGL:
   #       Log likelihood of Q matrix given observations of tree and 
   #       tip states.
   #       ! Note that QlogL will have to be revised if Q is input
   #       ! as a prior distribution rather than fixed.
-  #   5. Number of SCM replicates
-  #   6. Count of 95% HPD character state transitions
-  return(list("gt_posteriors" = out,
+  #   6. Number of SCM replicates
+  #   7. Count of 95% HPD character state transitions
+  return(list("locus" = locus,
+              "gt_posteriors" = out,
               "assigned_edges" = detect_state_changes(tree$edge, genotype_states),
               "consensus_posteriors" = constate_posteriors,
               "QlogL" = multiSimmap[[1]]$logL[1],

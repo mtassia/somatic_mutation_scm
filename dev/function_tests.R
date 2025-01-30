@@ -12,11 +12,11 @@ tr<-read.tree(file="dev/data/test.vcf.cellphy.raxml.supportFBP") %>%
 #Read vcf
 vcf<-read.vcfR("dev/data/test.vcf.gz")
 gt_list.snp<-compile_gt_states.snp(vcf)
-gt_list.indel<-compile_gt_states.indel(vcf)
+# gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
 snp.q<-read_cellphy_model(bestModel_path = "dev/data/test.vcf.cellphy.raxml.bestModel")
-indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
+# indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
 
 ##### SCM SNPS #####
 #Focal variant
@@ -26,9 +26,11 @@ scm_example<-runSCM_single(x = "chr5_1295113",
                            Qmat = snp.q,
                            reduced = FALSE,
                            reps = 1000,
-                           cores=6)
+                           cores = 6)
 par(mfrow=c(1,1),ask=F)
-summarise_scm.snp(scm_example,plot=T)
+summarise_scm.snp(multiSimmap = scm_example,
+                  locus = "chr5:1295113",
+                  plot = FALSE)
 
 #Visualize individual SCM generations
 par(mfrow=c(5,5))
@@ -118,3 +120,65 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
   theme(strip.background = element_blank(),
         strip.text = element_text(face = "bold"),
         plot.title = element_text(hjust = 0.5, face = "bold"))
+
+##### HDF5 TESTS #####
+# Create h5 file with groups
+h5createFile("dev/data/test.h5")
+h5createGroup("dev/data/test.h5", "gt_posteriors")
+h5createGroup("dev/data/test.h5", "assigned_edges")
+h5createGroup("dev/data/test.h5", "consensus_posteriors")
+h5createGroup("dev/data/test.h5", "QlogL")
+h5createGroup("dev/data/test.h5", "scm_reps")
+h5createGroup("dev/data/test.h5", "hpd_counts")
+h5ls("dev/data/test.h5")
+
+loc.len <- length(grep(pattern = "chr9",
+                  x = names(gt_list.snp),
+                  value = TRUE))
+i <- 1
+for (loc in grep(pattern = "chr9",
+                 x = names(gt_list.snp),
+                 value = TRUE)) {
+  print(paste0("Processing locus ", i, " of ", loc.len))
+  start_time <- Sys.time()
+
+  scm <- runSCM_single(x = loc,
+                       tree = tr,
+                       gt_state_list = gt_list.snp,
+                       Qmat = snp.q,
+                       reduced = FALSE,
+                       reps = 100,
+                       cores = 6)
+  scm <- summarise_scm.snp(multiSimmap = scm,
+                           locus = loc,
+                           plot = FALSE)
+
+  h5write(obj = scm$gt_posteriors,
+          file = "dev/data/test.h5",
+          name = paste0("gt_posteriors/", loc))
+  h5write(obj = scm$assigned_edges,
+          file = "dev/data/test.h5",
+          name = paste0("assigned_edges/", loc))
+  h5write(obj = scm$consensus_posteriors,
+          file = "dev/data/test.h5",
+          name = paste0("consensus_posteriors/", loc))
+  h5write(obj = scm$QlogL,
+          file = "dev/data/test.h5",
+          name = paste0("QlogL/", loc))
+  h5write(obj = scm$scm_reps,
+          file = "dev/data/test.h5",
+          name = paste0("scm_reps/", loc))
+  h5write(obj = scm$hpd_counts,
+          file = "dev/data/test.h5",
+          name = paste0("hpd_counts/", loc))
+  
+  end_time <- Sys.time()
+  print(paste0("Time elapsed: ", end_time - start_time))
+  i <- i + 1
+}
+h5ls("dev/data/test.h5")
+
+# Read h5 file into object
+h5f <- H5Fopen("dev/data/test.h5")
+
+h5closeAll()
