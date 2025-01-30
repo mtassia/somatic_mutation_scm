@@ -310,7 +310,7 @@ read_cellphy_model <- function(bestModel_path) {
   names(Freq) <- States
 
   #Populate Q matrix columns in the following order:
-  #c("AA","CC","GG","TT","AC","AG","AT","CG","CT","GT")
+  #"AA","CC","GG","TT","AC","AG","AT","CG","CT","GT"
   AAvec <- c(NA,
           Rates["Zero"],
           Rates["Zero"],
@@ -666,7 +666,7 @@ summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = FALSE,
   
   print("Preparing output...")
 
-  # Prepare primary output dataframe:
+  # Prepare genotype posteriors per node/tip data frame:
   #   - Ordered sequentially by node/tip number
   #   - All genotype states are present as columns
   #   - Values are genotype posteriors for each node/tip
@@ -684,6 +684,57 @@ summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = FALSE,
 
   # Create a vector of consensus state posteriors (in node order)
   constate_posteriors <- apply(out, 1, max)
+
+  # Create an output dataframe for the 95% HPD character state transitions
+  # for each permissible genotype substitution
+  ## Define all possible unphased genotype states
+  states <- c("AA", "CC", "GG", "TT", "AC",
+            "AG", "AT", "CG", "CT", "GT")
+
+  ## Create empty dataframe to store the count of
+  ## 95% HPD character state transitions
+  hpd.df <- expand.grid(states,states) %>%
+              filter(Var1 != Var2) %>%
+              apply(., 1, function(x){
+                from <- strsplit(x[1], "")[[1]]
+                to <- strsplit(x[2], "")[[1]]
+                if (from[1] == from[2] & from[1] %in% to) {
+                  return(x)
+                }
+                if (sum(from %in% to) == 1) {
+                  return(x)
+                }
+              }) %>%
+              compact() %>%
+              bind_rows() %>%
+              arrange(Var1) %>% 
+              rename(from = Var1, to = Var2) %>%
+              mutate(lower_95hpd = 0,
+                    upper_95hpd = 0)
+
+  ## Create density object for SCM posteriors                  
+  dens.data <- density(multiSimmap)
+
+  ## Obtain the 95% HPD character state transitions and 
+  ## populate hpd.df
+  hpd.df <- lapply(1:nrow(hpd.df), function(x) {
+              # Get row from hpd.df
+              row <- hpd.df[x,]
+              # Create string for genotype transition
+              trans.str <- paste0(row[1, 1], "->", row[1, 2])
+
+              # If transition is present in multiSimmap density data
+              # populate hpd.df with 95% HPD transition counts
+              if (trans.str %in% dens.data$trans) {
+                i <- which(dens.data$trans == trans.str)
+                row$lower_95hpd <- dens.data$hpd[[i]][1,1]
+                row$upper_95hpd <- dens.data$hpd[[i]][1,2]
+                return(row)
+              } else {
+                return(row)
+              }
+            }) %>%
+            bind_rows()
 
   # Plotting
   if (plot == TRUE) {
@@ -752,10 +803,14 @@ summarise_scm.snp <- function(multiSimmap, PPthreshold = 0.95, plot = FALSE,
   #       tip states.
   #       ! Note that QlogL will have to be revised if Q is input
   #       ! as a prior distribution rather than fixed.
-  return(list("scm_summary" = out,
-              "assigned" = detect_state_changes(tree$edge, genotype_states),
-              "constate_PPs" = constate_posteriors,
-              "QlogL" = multiSimmap[[1]]$logL[1]))
+  #   5. Number of SCM replicates
+  #   6. Count of 95% HPD character state transitions
+  return(list("gt_posteriors" = out,
+              "assigned_edges" = detect_state_changes(tree$edge, genotype_states),
+              "consensus_posteriors" = constate_posteriors,
+              "QlogL" = multiSimmap[[1]]$logL[1],
+              "scm_reps" = length(multiSimmap),
+              "hpd_counts" = hpd.df))
 }
 
 #* Output a summary for indel SCM, optionally plot

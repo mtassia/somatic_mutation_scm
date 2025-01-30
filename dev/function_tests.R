@@ -39,7 +39,7 @@ null<-sapply(scm_example[sample(seq(1,1000),size = 25,replace = F)],
 
 #Visualize random sample of SCM summaries
 par(mfrow=c(4,5))
-for ( i in sample(names(gt_list.snp),size = 20,replace = F) ){
+for ( i in sample(names(gt_list.snp),size = 20,replace = F) ) {
   scm<-runSCM_single(
     x=i,
     tree=tr,
