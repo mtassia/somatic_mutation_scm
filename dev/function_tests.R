@@ -41,7 +41,7 @@ null<-sapply(scm_example[sample(seq(1,1000),size = 25,replace = F)],
 
 #Visualize random sample of SCM summaries
 par(mfrow=c(4,5))
-for ( i in sample(names(gt_list.snp),size = 20,replace = F) ) {
+for ( i in sample(names(gt_list.snp), size = 20, replace = FALSE ) ) {
   scm<-runSCM_single(
     x=i,
     tree=tr,
@@ -52,9 +52,13 @@ for ( i in sample(names(gt_list.snp),size = 20,replace = F) ) {
     reduced = T)
   
   print(paste0("Q logL: ",scm[[1]]$logL[1]))
-  summarise_scm.snp(scm,plot = T,title=i,legend = F)
+  summarise_scm.snp(scm,
+                    plot = T,
+                    title = i,
+                    legend = FALSE,
+                    locus = i)
   lapply(scm,function(x) {x$logL[1]}) %>% unlist() %>% summary()
-  tmp<-summary(scm)
+  tmp <- summary(scm)
 }
 
 ##### SCM INDELS #####
@@ -123,6 +127,11 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
 
 ##### HDF5 TESTS #####
 # Create h5 file with groups
+# TODO: Add ML tree as static group
+# TODO: Add metadata as static group (chr, records, runtime, date, etc.)
+# TODO: Add scm_reps as static group
+# TODO: Add Q matrix as static group
+
 h5createFile("dev/data/test.h5")
 h5createGroup("dev/data/test.h5", "gt_posteriors")
 h5createGroup("dev/data/test.h5", "assigned_edges")
@@ -132,14 +141,22 @@ h5createGroup("dev/data/test.h5", "scm_reps")
 h5createGroup("dev/data/test.h5", "hpd_counts")
 h5ls("dev/data/test.h5")
 
-loc.len <- length(grep(pattern = "chr9",
+
+## params
+chr <- "chr21"
+its <- 1000
+crs <- 6
+records <- length(grep(pattern = "chr21",
                   x = names(gt_list.snp),
                   value = TRUE))
+t1 <- Sys.time()
+
+## loop through chr
 i <- 1
-for (loc in grep(pattern = "chr9",
+for (loc in grep(pattern = "chr21",
                  x = names(gt_list.snp),
                  value = TRUE)) {
-  print(paste0("Processing locus ", i, " of ", loc.len))
+  print(paste0("Processing locus ", i, " of ", records))
   start_time <- Sys.time()
 
   scm <- runSCM_single(x = loc,
@@ -147,8 +164,8 @@ for (loc in grep(pattern = "chr9",
                        gt_state_list = gt_list.snp,
                        Qmat = snp.q,
                        reduced = FALSE,
-                       reps = 100,
-                       cores = 6)
+                       reps = its,
+                       cores = crs)
   scm <- summarise_scm.snp(multiSimmap = scm,
                            locus = loc,
                            plot = FALSE)
@@ -176,9 +193,19 @@ for (loc in grep(pattern = "chr9",
   print(paste0("Time elapsed: ", end_time - start_time))
   i <- i + 1
 }
+
+## End params
+t2 <- Sys.time()
+
+## Create static groups
+
+
+
 h5ls("dev/data/test.h5")
 
 # Read h5 file into object
 h5f <- H5Fopen("dev/data/test.h5")
 
 h5closeAll()
+
+
