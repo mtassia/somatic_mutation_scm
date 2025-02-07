@@ -132,80 +132,12 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
 # TODO: Add scm_reps as static group
 # TODO: Add Q matrix as static group
 
-h5createFile("dev/data/test.h5")
-h5createGroup("dev/data/test.h5", "gt_posteriors")
-h5createGroup("dev/data/test.h5", "assigned_edges")
-h5createGroup("dev/data/test.h5", "consensus_posteriors")
-h5createGroup("dev/data/test.h5", "QlogL")
-h5createGroup("dev/data/test.h5", "scm_reps")
-h5createGroup("dev/data/test.h5", "hpd_counts")
-h5ls("dev/data/test.h5")
-
-
-## params
-chr <- "chr21"
-its <- 1000
-crs <- 6
-records <- length(grep(pattern = "chr21",
-                  x = names(gt_list.snp),
-                  value = TRUE))
-t1 <- Sys.time()
-
-## loop through chr
-i <- 1
-for (loc in grep(pattern = "chr21",
-                 x = names(gt_list.snp),
-                 value = TRUE)) {
-  print(paste0("Processing locus ", i, " of ", records))
-  start_time <- Sys.time()
-
-  scm <- runSCM_single(x = loc,
-                       tree = tr,
-                       gt_state_list = gt_list.snp,
-                       Qmat = snp.q,
-                       reduced = FALSE,
-                       reps = its,
-                       cores = crs)
-  scm <- summarise_scm.snp(multiSimmap = scm,
-                           locus = loc,
-                           plot = FALSE)
-
-  h5write(obj = scm$gt_posteriors,
-          file = "dev/data/test.h5",
-          name = paste0("gt_posteriors/", loc))
-  h5write(obj = scm$assigned_edges,
-          file = "dev/data/test.h5",
-          name = paste0("assigned_edges/", loc))
-  h5write(obj = scm$consensus_posteriors,
-          file = "dev/data/test.h5",
-          name = paste0("consensus_posteriors/", loc))
-  h5write(obj = scm$QlogL,
-          file = "dev/data/test.h5",
-          name = paste0("QlogL/", loc))
-  h5write(obj = scm$scm_reps,
-          file = "dev/data/test.h5",
-          name = paste0("scm_reps/", loc))
-  h5write(obj = scm$hpd_counts,
-          file = "dev/data/test.h5",
-          name = paste0("hpd_counts/", loc))
-  
-  end_time <- Sys.time()
-  print(paste0("Time elapsed: ", end_time - start_time))
-  i <- i + 1
-}
-
-## End params
-t2 <- Sys.time()
-
-## Create static groups
-
-
-
-h5ls("dev/data/test.h5")
-
-# Read h5 file into object
-h5f <- H5Fopen("dev/data/test.h5")
-
-h5closeAll()
-
-
+source("dev/bin/SCM_functions.R")
+df <- multi_scm(gt_state_list = gt_list.snp,
+          tree = tr,
+          Q = snp.q,
+          scm_its = 100,
+          cores = 6,
+          h5f_path = "dev/data/test.h5",
+          chr = "chr7",
+          overwrite = TRUE)
