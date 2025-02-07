@@ -1,5 +1,6 @@
 source("dev/bin/SCM_functions.R")
 options(vsc.dev.args = list(width = 1200,height=1000))
+par(mar = c(2,2,2,2))
 
 ##### Data import #####
 #Read tree
@@ -133,11 +134,22 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
 # TODO: Add Q matrix as static group
 
 source("dev/bin/SCM_functions.R")
-df <- multi_scm(gt_state_list = gt_list.snp,
+multi_scm(gt_state_list = gt_list.snp,
           tree = tr,
           Q = snp.q,
-          scm_its = 100,
+          scm_its = 1000,
           cores = 6,
           h5f_path = "dev/data/test.h5",
-          chr = "chr7",
+          chr = "chr21",
           overwrite = TRUE)
+
+h5 <- H5Fopen("dev/data/test.h5")
+ggplot(h5$`summary_df` %>% rownames_to_column(var = "index")) +
+  geom_line(aes(y = runtime, x = index), group = 1, linewidth = 1) +
+  scale_y_continuous(breaks = scales::pretty_breaks()) + 
+  theme_cowplot() +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title = element_text(size = 24, face = "bold")) +
+  labs(y = "Runtime / 1000 SCMs (s)", x = "Locus index")
+h5closeAll()

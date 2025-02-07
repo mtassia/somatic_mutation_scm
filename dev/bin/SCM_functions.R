@@ -1244,18 +1244,19 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   h5createGroup(h5f_path, "hpd_counts")
 
   # Create/load experiment-wide data
-  summary_df <- df <- data.frame(chr = as.character(),
-                 locus = as.integer(),
-                 iterations = as.integer(),
-                 cores = as.integer(),
-                 runtime = as.numeric(),
-                 muts95low = as.integer(),
-                 muts95high = as.integer(),
-                 muts_assigned = as.integer(),
-                 QlogL = as.numeric(),
-                 stringsAsFactors = FALSE)
+  summary_df <- data.frame(chr = as.character(),
+                           locus = as.integer(),
+                           germline = as.character(),
+                           iterations = as.integer(),
+                           cores = as.integer(),
+                           runtime = as.numeric(),
+                           muts95low = as.integer(),
+                           muts95high = as.integer(),
+                           muts_assigned = as.integer(),
+                           QlogL = as.numeric(),
+                           stringsAsFactors = FALSE)
   root_node <- length(tree$tip.label) + 1
-  loci <- grep(pattern = chr_str,
+  loci <- grep(pattern = paste0(chr_str,"_"),
                x = names(gt_state_list),
                value = TRUE)
   n_rec <- length(loci)
@@ -1287,26 +1288,35 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                loc_str = loci[i],
                h5f = h5f_path)
 
-    end_time <- Sys.time()
-    df[i, ] <- list(chr = chr_str,
-                  locus = loci[i],
-                  iterations = scm_its,
-                  cores = cores,
-                  runtime = as.numeric(
-                    difftime(
-                             end_time,
-                             start_time,
-                             units = "sec")
-                  ),
-                  muts95low = sum(scm$hpd_counts$lower_95hpd),
-                  muts95high = sum(scm$hpd_counts$upper_95hpd),
-                  muts_assigned = sum(scm$assigned_edges),
-                  QlogL = scm$QlogL)
+    # Pull germline state at PPthreshold
+    germ <- scm$gt_posteriors[root_node, ]
+    if (any(germ >= PPthreshold)) {
+      germ <- names(which.max(germ))
+    } else {
+      germ <- NA
+    }
 
-    # if (i == 5) {
-    #   return(df)
-    #   break
-    # }
+    end_time <- Sys.time()
+    summary_df[i, ] <- list(chr = chr_str,
+                    locus = str_split(loci[i], "_")[[1]][2],
+                    germline = germ,
+                    iterations = scm_its,
+                    cores = cores,
+                    runtime = as.numeric(
+                      difftime(
+                              end_time,
+                              start_time,
+                              units = "sec")
+                    ),
+                    muts95low = sum(scm$hpd_counts$lower_95hpd),
+                    muts95high = sum(scm$hpd_counts$upper_95hpd),
+                    muts_assigned = sum(scm$assigned_edges),
+                    QlogL = scm$QlogL)
+
+    if (i == 5) {
+      h5write(summary_df, h5f_path, "summary_df")
+      break
+    }
   }
-  return(df)
+  # h5write(summary_df, h5f_path, "summary_df")
 }
