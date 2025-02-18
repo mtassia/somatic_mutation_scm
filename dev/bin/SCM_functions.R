@@ -3,7 +3,7 @@ cran_packages <- c("BiocManager", "tidyverse", "data.table",
                     "pbapply", "pbmcapply", "vcfR",
                     "ape", "phytools", "cowplot",
                     "RColorBrewer", "snow", "markophylo",
-                    "ggtext", "progress")
+                    "ggtext", "progress", "parallel")
 
 for (pkg in cran_packages) {
   if (!require(pkg, character.only = TRUE)) {
@@ -597,7 +597,7 @@ runSCM_single <- function(x, tree, gt_state_list,
   }
   
   # Prep cores and print run info
-  cl <- makeSOCKcluster(rep("localhost", cores))
+  cl <- makeCluster(cores)
   if (!quietly) {
     cat(paste0("Performing stochastic character mapping on ", x, "...\n"))
     cat(paste0("Cores: ", cores, "\n"))
@@ -606,7 +606,7 @@ runSCM_single <- function(x, tree, gt_state_list,
   }
   
   # Run phytools::make.simmap() using all cores specified in <cl>
-  scm <- clusterApply(cl,
+  scm <- parLapply(cl,
                       x = replicate(cores,
                                     as.matrix(gt_matrix),
                                     simplify = FALSE),
@@ -614,8 +614,8 @@ runSCM_single <- function(x, tree, gt_state_list,
                       tree = tree,
                       Q = Qmat,
                       pi = root_state,
-                      nsim = as.integer(round(reps / cores)))
-  scm <- do.call("c", scm)
+                      nsim = as.integer(round(reps / cores))) %>%
+         do.call("c", .)
   
   # Reclass simmap if not properly classed by output above
   if(!("multiSimmap" %in% class(scm))) {
