@@ -1256,9 +1256,13 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                            QlogL = as.numeric(),
                            stringsAsFactors = FALSE)
   root_node <- length(tree$tip.label) + 1
-  loci <- grep(pattern = paste0(chr_str,"_"),
-               x = names(gt_state_list),
-               value = TRUE)
+  if (chr_str == "all") {
+    loci <- names(gt_state_list)
+  } else {
+    loci <- grep(pattern = paste0(chr_str,"_"),
+                x = names(gt_state_list),
+                value = TRUE)
+  }
   n_rec <- length(loci)
 
   pb <- progress_bar$new(
@@ -1313,10 +1317,10 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                     muts_assigned = sum(scm$assigned_edges),
                     QlogL = scm$QlogL)
 
-    if (i == 5) {
-      h5write(summary_df, h5f_path, "summary_df")
-      break
-    }
+    # if (i == 5) {
+    #   h5write(summary_df, h5f_path, "summary_df")
+    #   break
+    # }
   }
-  # h5write(summary_df, h5f_path, "summary_df")
+  h5write(summary_df, h5f_path, "summary_df")
 }
