@@ -27,7 +27,7 @@ scm_example<-runSCM_single(x = "chr5_1295113",
                            Qmat = snp.q,
                            reduced = FALSE,
                            reps = 100,
-                           cores = 20)
+                           cores = 6)
 par(mfrow=c(1,1),ask=F)
 summarise_scm.snp(multiSimmap = scm_example,
                   locus = "chr5:1295113",
@@ -139,10 +139,10 @@ multi_scm(gt_state_list = gt_list.snp,
           tree = tr,
           Q = snp.q,
           scm_its = 100,
-          cores = 20,
+          cores = 6,
           h5f_path = "dev/data/test.h5",
-          chr = "all",
-          overwrite = TRUE)
+          chr = "chr21",
+          overwrite = FALSE)
 
 h5 <- H5Fopen("dev/data/test.h5")
 ggplot(h5$`summary_df` %>% rownames_to_column(var = "index")) +

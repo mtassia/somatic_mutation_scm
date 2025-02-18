@@ -1171,12 +1171,6 @@ scm_to_h5f <- function(scm_summary, loc_str, h5f) {
   h5write(obj = scm_summary$consensus_posteriors,
           file = h5f,
           name = paste0("consensus_posteriors/", loc_str))
-  h5write(obj = scm_summary$QlogL,
-          file = h5f,
-          name = paste0("QlogL/", loc_str))
-  h5write(obj = scm_summary$scm_reps,
-          file = h5f,
-          name = paste0("scm_reps/", loc_str))
   h5write(obj = scm_summary$hpd_counts,
           file = h5f,
           name = paste0("hpd_counts/", loc_str))
@@ -1227,35 +1221,43 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     return(print("ERROR: 'Q' must be provided."))
   }
 
-  # If h5f exists and overwrite = FALSE, return error
+  # If h5f exists and overwrite = FALSE, obtain list of loci already included
   if (file.exists(h5f_path) & overwrite == FALSE) {
-    return(print("ERROR: h5f file already exists. Set 'overwrite' = TRUE to overwrite."))
-  } else if (file.exists(h5f_path) & overwrite == TRUE) {
-    file.remove(h5f_path)
+    loci_in_h5f <- h5ls(h5f_path,recursive = T) %>% 
+                    filter(group == "/QlogL") %>% 
+                    pull(name)
+  } else {
+    loci_in_h5f <- NULL
   }
 
-  # Create h5f file and groups
-  h5createFile(h5f_path)
-  h5createGroup(h5f_path, "gt_posteriors")
-  h5createGroup(h5f_path, "assigned_edges")
-  h5createGroup(h5f_path, "consensus_posteriors")
-  h5createGroup(h5f_path, "QlogL")
-  h5createGroup(h5f_path, "scm_reps")
-  h5createGroup(h5f_path, "hpd_counts")
+  # If h5f exists and overwrite = TRUE, remove and replace
+  if (file.exists(h5f_path) & overwrite == TRUE) {
+    file.remove(h5f_path)
+    
+    # Create h5f file and groups
+    h5createFile(h5f_path)
+    h5createGroup(h5f_path, "gt_posteriors")
+    h5createGroup(h5f_path, "assigned_edges")
+    h5createGroup(h5f_path, "consensus_posteriors")
+    h5createGroup(h5f_path, "hpd_counts")
+    h5createGroup(h5f_path, "summary")
+  }
 
-  # Create/load experiment-wide data
-  summary_df <- data.frame(chr = as.character(),
-                           locus = as.integer(),
-                           germline = as.character(),
-                           iterations = as.integer(),
-                           cores = as.integer(),
-                           runtime = as.numeric(),
-                           muts95low = as.integer(),
-                           muts95high = as.integer(),
-                           muts_assigned = as.integer(),
-                           QlogL = as.numeric(),
-                           stringsAsFactors = FALSE)
+  # If h5f does not exist, create h5f file and groups
+  if (!file.exists(h5f_path)) {
+    h5createFile(h5f_path)
+    h5createGroup(h5f_path, "gt_posteriors")
+    h5createGroup(h5f_path, "assigned_edges")
+    h5createGroup(h5f_path, "consensus_posteriors")
+    h5createGroup(h5f_path, "hpd_counts")
+    h5createGroup(h5f_path, "summary")
+  }
+
+  # Set root node index
   root_node <- length(tree$tip.label) + 1
+
+  # If chr_str == "all", run SCM on all loci in gt_state_list
+  # Else, run SCM on all loci in gt_state_list with chr_str
   if (chr_str == "all") {
     loci <- names(gt_state_list)
   } else {
@@ -1263,8 +1265,9 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                 x = names(gt_state_list),
                 value = TRUE)
   }
-  n_rec <- length(loci)
 
+  # Set progress bar
+  n_rec <- length(loci)
   pb <- progress_bar$new(
     format = "  progress (:current/:total) [:bar] elapsed: :elapsedfull, eta: :eta",
     total = n_rec, clear = FALSE, width = options()$width)
@@ -1272,6 +1275,9 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   # Loop through all locis in gt_state_list with chr_str and run SCM
   for (i in 1:n_rec){
     pb$tick()
+    if (overwrite == FALSE & loci[i] %in% loci_in_h5f) {
+      next
+    }
     
     start_time <- Sys.time()
     scm <- runSCM_single(x = loci[i],
@@ -1301,26 +1307,23 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     }
 
     end_time <- Sys.time()
-    summary_df[i, ] <- list(chr = chr_str,
-                    locus = str_split(loci[i], "_")[[1]][2],
-                    germline = germ,
-                    iterations = scm_its,
-                    cores = cores,
-                    runtime = as.numeric(
+    summary_df <- data.frame("chr" = chr_str,
+                    "locus" = str_split(loci[i], "_")[[1]][2],
+                    "germline" = germ,
+                    "iterations" = scm_its,
+                    "cores" = cores,
+                    "runtime" = as.numeric(
                       difftime(
                               end_time,
                               start_time,
                               units = "sec")
                     ),
-                    muts95low = sum(scm$hpd_counts$lower_95hpd),
-                    muts95high = sum(scm$hpd_counts$upper_95hpd),
-                    muts_assigned = sum(scm$assigned_edges),
-                    QlogL = scm$QlogL)
-
-    # if (i == 5) {
-    #   h5write(summary_df, h5f_path, "summary_df")
-    #   break
-    # }
+                    "muts95low" = sum(scm$hpd_counts$lower_95hpd),
+                    "muts95high" = sum(scm$hpd_counts$upper_95hpd),
+                    "muts_assigned" = sum(scm$assigned_edges),
+                    "QlogL" = scm$QlogL)
+    h5write(obj = summary_df, 
+            file = h5f_path, 
+            name = paste("summary/", loci[i]))
   }
-  h5write(summary_df, h5f_path, "summary_df")
 }
