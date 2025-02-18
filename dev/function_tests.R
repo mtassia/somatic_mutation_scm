@@ -4,19 +4,19 @@ par(mar = c(2,2,2,2))
 
 ##### Data import #####
 #Read tree
-tr<-read.tree(file="dev/data/test.vcf.cellphy.raxml.supportFBP") %>%
+tr<-read.tree(file=paste0(getwd(),"/dev/data/test.vcf.cellphy.raxml.supportFBP")) %>%
   root(outgroup="outgroup", resolve.root = T) %>%
   drop.tip("outgroup") %>%
   ladderize()
 #tr<-collapse_poor_supported_edges(tr,90)
 
 #Read vcf
-vcf<-read.vcfR("dev/data/test.vcf.gz")
+vcf<-read.vcfR(paste0(getwd(),"/dev/data/test.vcf.gz"))
 gt_list.snp<-compile_gt_states.snp(vcf)
 # gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
-snp.q<-read_cellphy_model(bestModel_path = "dev/data/test.vcf.cellphy.raxml.bestModel")
+snp.q<-read_cellphy_model(bestModel_path = paste0(getwd(),"/dev/data/test.vcf.cellphy.raxml.bestModel"))
 # indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
 
 ##### SCM SNPS #####
