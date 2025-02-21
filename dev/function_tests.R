@@ -4,19 +4,19 @@ par(mar = c(2,2,2,2))
 
 ##### Data import #####
 #Read tree
-tr<-read.tree(file=paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.supportFBP")) %>%
+tr<-read.tree(file=paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.supportFBP")) %>%
   root(outgroup="outgroup", resolve.root = T) %>%
   drop.tip("outgroup") %>%
   ladderize()
 #tr<-collapse_poor_supported_edges(tr,90)
 
 #Read vcf
-vcf<-read.vcfR(paste0(getwd(), "/dev/data/test.vcf.gz"))
+vcf<-read.vcfR(paste0(getwd(), "/dev/data/test2.vcf.gz"))
 gt_list.snp<-compile_gt_states.snp(vcf)
 # gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
-snp.q<-read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.bestModel"))
+snp.q<-read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.bestModel"))
 # indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
 
 ##### SCM SNPS #####
@@ -26,7 +26,7 @@ scm_example<-runSCM_single(x = "chr5_1295113",
                            gt_state_list = gt_list.snp,
                            Qmat = snp.q,
                            reduced = FALSE,
-                           reps = 100,
+                           reps = 1000,
                            cores = 6)
 par(mfrow=c(1,1),ask=F)
 summarise_scm.snp(multiSimmap = scm_example,
@@ -134,23 +134,66 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
 # TODO: Add Q matrix as static group
 
 source("dev/bin/SCM_functions.R")
-file.remove("dev/data/test.h5")
+# file.remove("dev/data/test.h5")
 multi_scm(gt_state_list = gt_list.snp,
           tree = tr,
           Q = snp.q,
           scm_its = 100,
           cores = 6,
-          h5f_path = "dev/data/test.h5",
-          chr = "chr21",
+          h5f_path = "dev/data/test2.h5",
+          chr = "all",
           overwrite = FALSE)
 
-h5 <- H5Fopen("dev/data/test.h5")
-ggplot(h5$`summary_df` %>% rownames_to_column(var = "index")) +
-  geom_line(aes(y = runtime / 1000, x = index), group = 1, linewidth = 1) +
-  scale_y_continuous(breaks = scales::pretty_breaks()) + 
+h5 <- H5Fopen("dev/data/test2.h5")
+h5_summary <- bind_rows(h5$`summary`) %>% 
+              tibble()
+events <- lapply(h5$`assigned_edges`, sum) %>% 
+  unlist() %>%
+  stack()
+h5closeAll()
+
+ggplot(h5_summary %>% rownames_to_column(var = "index")) +
+  geom_point(aes(y = runtime / iterations, x = index, color = QlogL), alpha = 0.5) +
+  scale_y_continuous(breaks = scales::pretty_breaks()) +
+  scale_color_viridis(option = "A", direction = -1) +
   theme_cowplot() +
   theme(axis.text.x = element_blank(),
         axis.ticks.x = element_blank(),
         axis.title = element_text(size = 24, face = "bold")) +
-  labs(y = "Mean runtime per SCM (s)", x = "Locus index")
-h5closeAll()
+  labs(y = "Mean runtime per SCM (sec)", x = "Locus index")
+
+ggplot(h5_summary %>%
+         group_by(muts95low,muts95high) %>%
+         summarise(count = n()),
+       aes(x = as.factor(muts95low), y = as.factor(muts95high), fill = log10(count))) +
+  geom_tile() +
+  geom_label(aes(label = count), fill = "white", size = 4) +
+  coord_equal() +
+  scale_fill_viridis(option = "A") +
+  theme_cowplot() +
+  theme(panel.background = element_rect(fill = "black"),
+        axis.title = element_text(size = 24, face = "bold")) +
+  labs(x = "95% HPD lower bound",
+       y = "95% HPD upper bound",
+       fill = "log10(count)")
+ggplot(events, aes(x = values)) +
+  geom_histogram(binwidth = 1, fill = "lightblue", color = "black") +
+  scale_y_log10() +
+  scale_x_continuous(breaks = seq(0,6,1)) +
+  theme_cowplot() +
+  labs(x = "Mutations assigned to tree (PP ≥ 95%)",
+       y = "Count")
+h5_summary %>%
+  mutate(HPDrange = (muts95high - muts95low) + 1) %>%
+  group_by(HPDrange,muts_assigned) %>%
+  summarise(count = n()) %>%
+  ggplot(aes(y = muts_assigned, x = HPDrange, fill = log10(count))) +
+    geom_tile() +
+    geom_label(aes(label = count), fill = "white", size = 6) +
+    coord_equal() +
+    scale_fill_viridis(option = "A", begin = 0.25, guide = "none") +
+    theme_cowplot() +
+    theme(panel.background = element_rect(fill = "black"),
+          axis.title = element_text(size = 24, face = "bold")) +
+    labs(x = "Mutation events range (95% HPD, inclusive)",
+         y = "Assigned mutations (PP ≥ 95%)")

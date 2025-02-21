@@ -3,7 +3,8 @@ cran_packages <- c("BiocManager", "tidyverse", "data.table",
                     "pbapply", "pbmcapply", "vcfR",
                     "ape", "phytools", "cowplot",
                     "RColorBrewer", "snow", "markophylo",
-                    "ggtext", "progress", "parallel")
+                    "ggtext", "progress", "parallel",
+                    "ggbeeswarm", "viridis")
 
 for (pkg in cran_packages) {
   if (!require(pkg, character.only = TRUE)) {
@@ -1224,7 +1225,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   # If h5f exists and overwrite = FALSE, obtain list of loci already included
   if (file.exists(h5f_path) & overwrite == FALSE) {
     loci_in_h5f <- h5ls(h5f_path,recursive = T) %>% 
-                    filter(group == "/QlogL") %>% 
+                    filter(group == "/summary") %>% 
                     pull(name)
   } else {
     loci_in_h5f <- NULL
@@ -1267,7 +1268,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   }
 
   # Set progress bar
-  n_rec <- length(loci)
+  n_rec <- length(loci) #TODO: Change this to accommodate overwrite = FALSE
   pb <- progress_bar$new(
     format = "  progress (:current/:total) [:bar] elapsed: :elapsedfull, eta: :eta",
     total = n_rec, clear = FALSE, width = options()$width)
@@ -1275,11 +1276,16 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   # Loop through all locis in gt_state_list with chr_str and run SCM
   for (i in 1:n_rec){
     pb$tick()
-    if (overwrite == FALSE & loci[i] %in% loci_in_h5f) {
+
+    # If locus already in h5f and overwrite = FALSE, skip
+    if (overwrite == FALSE & any(grepl(pattern = loci[i], 
+                                       x = loci_in_h5f))) {
       next
     }
-    
+
     start_time <- Sys.time()
+    
+    # Run SCM
     scm <- runSCM_single(x = loci[i],
                          tree = tree,
                          gt_state_list = gt_state_list,
@@ -1289,11 +1295,15 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                          root_state = "equal",
                          cores = cores,
                          quietly = TRUE)
+    
+    # Summarise SCM
     scm <- summarise_scm.snp(multiSimmap = scm,
                                     locus = loci[i],
                                     PPthreshold = PPthreshold,
                                     plot = FALSE,
                                     quietly = TRUE)
+    
+    # Write SCM results to h5f
     scm_to_h5f(scm_summary = scm,
                loc_str = loci[i],
                h5f = h5f_path)
@@ -1307,6 +1317,8 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     }
 
     end_time <- Sys.time()
+
+    # Write summary to h5f
     summary_df <- data.frame("chr" = chr_str,
                     "locus" = str_split(loci[i], "_")[[1]][2],
                     "germline" = germ,
@@ -1324,6 +1336,6 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                     "QlogL" = scm$QlogL)
     h5write(obj = summary_df, 
             file = h5f_path, 
-            name = paste("summary/", loci[i]))
+            name = paste0("summary/", loci[i]))
   }
 }
