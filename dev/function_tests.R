@@ -16,86 +16,98 @@ gt_list.snp<-compile_gt_states.snp(vcf)
 # gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
-snp.q<-read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.bestModel"))
+snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.bestModel"))
 # indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
 
 ##### SCM SNPS #####
 #Focal variant
-scm_example<-runSCM_single(x = "chr5_1295113",
-                           tree = tr,
-                           gt_state_list = gt_list.snp,
-                           Qmat = snp.q,
-                           reduced = FALSE,
-                           reps = 1000,
-                           cores = 6)
-par(mfrow=c(1,1),ask=F)
+# var <- "chr5_1295113"
+var <- "chr22_50057483"
+# var <- "chr9_5073770"
+scm_example <- runSCM_single(x = var,
+                             tree = tr,
+                             gt_state_list = gt_list.snp,
+                             Qmat = snp.q,
+                             reduced = FALSE,
+                             reps = 1000,
+                             cores = 6)
+par(mfrow = c(1, 1), ask = FALSE)
 summarise_scm.snp(multiSimmap = scm_example,
-                  locus = "chr5:1295113",
-                  plot = T)
+                  locus = var,
+                  plot = TRUE)
+plot(density(scm_example))
+
+#Plot state priors and posteriors w.r.t. tree
+plot_state_probs_on_tree(locus_str = var,
+                         gt_state_list = gt_list.snp,
+                         scm_summary = summarise_scm.snp(multiSimmap = scm_example,
+                                                         locus = var,
+                                                         plot = FALSE),
+                         tree = tr)
 
 #Visualize individual SCM generations
-par(mfrow=c(5,5))
-null<-sapply(scm_example[sample(seq(1,1000),size = 25,replace = F)],
+par(mfrow = c(5, 5))
+null <- sapply(scm_example[sample(seq(1, 1000), size = 25, replace = FALSE)],
              plot,
-             ftype="off",
-             lwd=1.5)
+             ftype = "off",
+             lwd = 1.5)
 
 #Visualize random sample of SCM summaries
-par(mfrow=c(4,5))
-for ( i in sample(names(gt_list.snp), size = 20, replace = FALSE ) ) {
-  scm<-runSCM_single(
-    x=i,
-    tree=tr,
+par(mfrow = c(4, 5))
+for (i in sample(names(gt_list.snp), size = 20, replace = FALSE)) {
+  scm <- runSCM_single(
+    x = i,
+    tree = tr,
     gt_state_list = gt_list.snp,
     Qmat = snp.q,
     reps = 100,
     cores = 6,
-    reduced = T)
+    reduced = TRUE)
   
-  print(paste0("Q logL: ",scm[[1]]$logL[1]))
+  print(paste0("Q logL: ", scm[[1]]$logL[1]))
   summarise_scm.snp(scm,
-                    plot = T,
+                    plot = TRUE,
                     title = i,
                     legend = FALSE,
                     locus = i)
-  lapply(scm,function(x) {x$logL[1]}) %>% unlist() %>% summary()
+  lapply(scm, function(x) {x$logL[1]}) %>% unlist() %>% summary()
   tmp <- summary(scm)
 }
 
 ##### SCM INDELS #####
-site=sample(names(gt_list.indel),size=1)
+site = sample(names(gt_list.indel),size=1)
 scm_example <- runSCM_single(
   x = site,
   tree = tr,
   gt_state_list = gt_list.indel,
   Qmat = indel.q,
-  reduced = F,
+  reduced = FALSE,
   reps = 1000,
-  cores=6)
-par(mfrow=c(1,1),ask=F)
+  cores = 6)
+par(mfrow = c(1, 1), ask = FALSE)
 plot_density_hist.indel(scm_example)
-summarise_scm.indel(scm_example,plot=T,title=site)
+summarise_scm.indel(scm_example, plot = TRUE, title = site)
 
-par(mfrow=c(5,5))
-null<-sapply(scm_example[sample(seq(1,1000),size = 25,replace = F)],
-             plot,
-             ftype="off",
-             lwd=1.5,
-             colors=c("REF"="gray","HET"="royalblue","ALT"="tomato"))
+par(mfrow = c(5, 5))
+null <- sapply(scm_example[sample(seq(1, 1000), size = 25, replace = FALSE)],
+            plot,
+            ftype = "off",
+            lwd = 1.5,
+            colors = c("REF" = "gray", "HET" = "royalblue", "ALT" = "tomato"))
 
-par(mfrow=c(4,5))
-for ( i in sample(names(gt_list.indel),size = 20,replace = F) ){
-  scm<-runSCM_single(x=i,
-    tree=tr,
+par(mfrow = c(4, 5))
+for (i in sample(names(gt_list.indel), size = 20, replace = FALSE)){
+  scm < -runSCM_single(x = i,
+    tree = tr,
     gt_state_list = gt_list.indel,
     Qmat = indel.q,
     reps = 1000,
     cores = 6,
-    reduced = T)
+    reduced = TRUE)
   print(paste0("Q logL: ",scm[[1]]$logL[1]))
-  summarise_scm.indel(scm,plot = T,title=i,legend = F)
-  lapply(scm,function(x) {x$logL[1]}) %>% unlist() %>% summary()
-  tmp<-summary(scm)
+  summarise_scm.indel(scm, plot = TRUE, title = i, legend = FALSE)
+  lapply(scm, function(x) {x$logL[1]}) %>% unlist() %>% summary()
+  tmp <- summary(scm)
 }
 
 scm_summary <- summary(scm_example)
