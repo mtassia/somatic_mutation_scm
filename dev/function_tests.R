@@ -4,19 +4,19 @@ par(mar = c(2,2,2,2))
 
 ##### Data import #####
 #Read tree
-tr<-read.tree(file=paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.supportFBP")) %>%
+tr<-read.tree(file=paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.supportFBP")) %>%
   root(outgroup="outgroup", resolve.root = T) %>%
   drop.tip("outgroup") %>%
   ladderize()
 #tr<-collapse_poor_supported_edges(tr,90)
 
 #Read vcf
-vcf<-read.vcfR(paste0(getwd(), "/dev/data/test2.vcf.gz"))
+vcf<-read.vcfR(paste0(getwd(), "/dev/data/test.vcf.gz"))
 gt_list.snp<-compile_gt_states.snp(vcf)
 # gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
-snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.bestModel"))
+snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.bestModel"))
 # indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
 
 ##### SCM SNPS #####
@@ -142,12 +142,6 @@ ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
         plot.title = element_text(hjust = 0.5, face = "bold"))
 
 ##### HDF5 TESTS #####
-# Create h5 file with groups
-# TODO: Add ML tree as static group
-# TODO: Add metadata as static group (chr, records, runtime, date, etc.)
-# TODO: Add scm_reps as static group
-# TODO: Add Q matrix as static group
-
 source("dev/bin/SCM_functions.R")
 # file.remove("dev/data/test.h5")
 multi_scm(gt_state_list = gt_list.snp,
@@ -155,14 +149,15 @@ multi_scm(gt_state_list = gt_list.snp,
           Q = snp.q,
           scm_its = 100,
           cores = 6,
-          h5f_path = "dev/data/test_chr21.h5",
-          chr = "chr21",
-          overwrite = FALSE)
+          h5f_path = "dev/data/test.h5",
+          chr = "all",
+          overwrite = FALSE,
+          dryrun = TRUE)
 
 h5 <- H5Fopen("dev/data/test_chr21.h5")
-h5_summary <- bind_rows(h5$`summary`) %>% 
+h5_summary <- bind_rows(h5$`summary`) %>%
               tibble()
-events <- lapply(h5$`assigned_edges`, sum) %>% 
+events <- lapply(h5$`assigned_edges`, sum) %>%
   unlist() %>%
   stack()
 h5closeAll()
