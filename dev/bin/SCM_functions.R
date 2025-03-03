@@ -4,7 +4,7 @@ cran_packages <- c("BiocManager", "tidyverse", "data.table",
                     "ape", "phytools", "cowplot",
                     "RColorBrewer", "snow", "markophylo",
                     "ggtext", "progress", "parallel",
-                    "ggbeeswarm", "viridis", "aplot")
+                    "viridis", "aplot")
 
 for (pkg in cran_packages) {
   if (!require(pkg, character.only = TRUE)) {
@@ -1268,16 +1268,13 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   }
 
   # Set progress bar
-  n_rec <- length(loci) #TODO: Change this to accommodate overwrite = FALSE
+  n_rec <- length(loci) - length(loci_in_h5f) #TODO: Change this to accommodate overwrite = FALSE
   pb <- progress_bar$new(
     format = "  progress (:current/:total) [:bar] elapsed: :elapsedfull, eta: :eta",
     total = n_rec, clear = FALSE, width = options()$width)
 
   # Loop through all locis in gt_state_list with chr_str and run SCM
   for (i in 1:n_rec){
-    
-    pb$tick() #TODO: Move this to end of loop
-
     # If locus already in h5f and overwrite = FALSE, skip
     # TODO: Check if locus is only partially present in h5f
     if (overwrite == FALSE & any(grepl(pattern = loci[i], 
@@ -1339,6 +1336,8 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     h5write(obj = summary_df, 
             file = h5f_path, 
             name = paste0("summary/", loci[i]))
+
+    pb$tick()
   }
 }
 
@@ -1399,9 +1398,10 @@ plot_state_probs_on_tree <- function(locus_str, gt_state_list, tree,
     labs(title = gsub(x = locus_str,
                       pattern = "_",
                       replacement = ":"),
-         subtitle = paste0("Germline genotype: ", germ, ", PP(GT) ≥ ", PPthreshold))
+         subtitle = paste0("Germline genotype: ", germ, ", Pr(GT) ≥ ", PPthreshold))
   } else {
     g <- ggtree(tree) +
+    geom_tiplab(align = TRUE, size = 0) +
     coord_cartesian(clip = "off") +
     theme_tree2() +
     theme(axis.text.x = element_text(size = 12),
@@ -1410,7 +1410,7 @@ plot_state_probs_on_tree <- function(locus_str, gt_state_list, tree,
     labs(title = gsub(x = locus_str,
                   pattern = "_",
                   replacement = ":"),
-         subtitle = paste0("Germline genotype: ", germ, ", PP(GT) ≥ ", PPthreshold))
+         subtitle = paste0("Germline genotype: ", germ, ", Pr(GT) ≥ ", PPthreshold))
   }
   
   p <- ggplot(prior_post %>% mutate(consensus = ifelse(prob >= PPthreshold, "TRUE", "FALSE")),
@@ -1423,7 +1423,7 @@ plot_state_probs_on_tree <- function(locus_str, gt_state_list, tree,
     scale_fill_viridis_c(guide = "legend") +
     scale_color_manual(values = c("FALSE" = "transparent", "TRUE" = "black")) +
     facet_wrap(~stat) +
-    coord_cartesian(clip = "off") +
+    # coord_cartesian(clip = "off") +
     theme_cowplot() +
     theme(axis.text.y = element_blank(),
           axis.title = element_blank(),
@@ -1434,11 +1434,11 @@ plot_state_probs_on_tree <- function(locus_str, gt_state_list, tree,
           legend.title = element_text(face = "bold")) +
     labs(fill = "Probability",
         size = "Probability",
-        color = paste0("PP(GT) ≥ ", PPthreshold))
+        color = paste0("Pr(GT) ≥ ", PPthreshold))
   
   par(mfrow = c(1, 1),
-      mar = c(2,2,2,2),
+      mar = c(5,5,5,5),
       ask = FALSE)
 
-  return(p %>% insert_left(g, width = 1.75))
+  return(p %>% insert_left(g, width = 3))
 }

@@ -22,8 +22,9 @@ snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vc
 ##### SCM SNPS #####
 #Focal variant
 # var <- "chr5_1295113"
-var <- "chr22_50057483"
+# var <- "chr22_50057483"
 # var <- "chr9_5073770"
+var <- sample(names(gt_list.snp), size = 1)
 scm_example <- runSCM_single(x = var,
                              tree = tr,
                              gt_state_list = gt_list.snp,
@@ -35,6 +36,8 @@ par(mfrow = c(1, 1), ask = FALSE)
 summarise_scm.snp(multiSimmap = scm_example,
                   locus = var,
                   plot = TRUE)
+
+par(mar = c(5,5,5,5))
 plot(density(scm_example))
 
 #Plot state priors and posteriors w.r.t. tree
@@ -152,11 +155,11 @@ multi_scm(gt_state_list = gt_list.snp,
           Q = snp.q,
           scm_its = 100,
           cores = 6,
-          h5f_path = "dev/data/test2.h5",
-          chr = "all",
+          h5f_path = "dev/data/test_chr21.h5",
+          chr = "chr21",
           overwrite = FALSE)
 
-h5 <- H5Fopen("dev/data/test2.h5")
+h5 <- H5Fopen("dev/data/test_chr21.h5")
 h5_summary <- bind_rows(h5$`summary`) %>% 
               tibble()
 events <- lapply(h5$`assigned_edges`, sum) %>% 
@@ -209,3 +212,14 @@ h5_summary %>%
           axis.title = element_text(size = 24, face = "bold")) +
     labs(x = "Mutation events range (95% HPD, inclusive)",
          y = "Assigned mutations (PP ≥ 95%)")
+
+ggplot(h5_summary, 
+       aes(x = as.factor(muts_assigned),
+           y = QlogL)) +
+  geom_hline(yintercept = 0, linetype = 2, color = "gray80") +
+  geom_quasirandom() +
+  scale_y_continuous(breaks = scales::pretty_breaks()) +
+  theme_cowplot() +
+  labs(x = "Assigned mutations (PP ≥ 95%)",
+       y = "Q matrix log-likelihood")
+
