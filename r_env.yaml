@@ -22,7 +22,8 @@ dependencies:
   - r-ggtext
   - r-aplot
   - r-viridis
-  - r-poisbinom
+  - r-poissonbinomial
+  - r-matrixstats
   - bioconductor-ggtree
   - bioconductor-rhdf5
 

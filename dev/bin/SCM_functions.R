@@ -4,7 +4,8 @@ cran_packages <- c("BiocManager", "tidyverse", "data.table",
                     "ape", "phytools", "cowplot",
                     "RColorBrewer", "snow", "markophylo",
                     "ggtext", "progress", "parallel",
-                    "viridis", "aplot", "poisbinom")
+                    "viridis", "aplot", "matrixStats",
+                    "PoissonBinomial")
 
 for (pkg in cran_packages) {
   if (!require(pkg, character.only = TRUE)) {
@@ -576,17 +577,20 @@ singleton_lrt <- function(x, gt_state_list) {
   var_states <- states[states != prior_con]
 
   # Compute likelihood of singleton (null)
-  p_single <- df[, var_states] %>%
-    rowSums() %>%
-    ppoisbinom(1, pp = ., lower_tail = TRUE, log_p = TRUE)
+  p_null <- dpbinom(x = 1, 
+              probs = rowSums(df[, var_states]),
+              log = TRUE,
+              method = "Poisson")
 
   # Compute likelihood of not singleton (alternative)
-  p_multi <- df[, var_states] %>%
-    rowSums() %>%
-    ppoisbinom(1, pp = ., lower_tail = FALSE, log_p = TRUE)
+  p_alt <- dpbinom(x = c(0, seq(2, nrow(df))), 
+             probs = rowSums(df[, var_states]),
+             log = TRUE,
+             method = "Poisson") %>%
+           logSumExp(na.rm = TRUE)
 
   # Compute LRT p-value; P(H0 | Data)
-  stat <- -2 * (p_single - p_multi)
+  stat <- -2 * (p_null - p_alt)
 
   # Return p-value
   return(pchisq(q = stat, df = 1, lower.tail = FALSE))

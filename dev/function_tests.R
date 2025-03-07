@@ -77,7 +77,7 @@ for (i in sample(names(gt_list.snp), size = 20, replace = FALSE)) {
   tmp <- summary(scm)
 }
 
-# ##### SCM INDELS #####
+##### SCM INDELS #####
 # site = sample(names(gt_list.indel),size=1)
 # scm_example <- runSCM_single(
 #   x = site,
@@ -230,7 +230,6 @@ singleton_lrt(x = var, gt_state_list = gt_list.snp)
 df <- tibble(gt_list.snp[[var]]) %>%
   select_if(~ !is.numeric(.) || sum(.) != 0)
   
-
 ## Plot example
 df %>%
   select(!c(locus, Indiv)) %>%
@@ -262,8 +261,6 @@ plot_state_probs_on_tree(locus_str = var,
                                                          plot = FALSE),
                          tree = tr)
 
-singleton_lrt(x = var, gt_state_list = gt_list.snp)
-
 ## If prior consensus state is the het state, perform SCM
 ## If the prior consensus state is not the prior, proceed to next step
 
@@ -285,22 +282,32 @@ var_states <- states[states != prior_con]
 df[, var_states] %>%
   rowSums() %>%
   dpoisbinom(seq(0, nrow(df)), pp = .) %>% 
-  data.frame(x = seq(0, nrow(df)), p = .) %>%
-  ggplot(aes(x = x, y = p)) +
-  geom_vline(xintercept = 1, linetype = 1, color = "skyblue") +
-  geom_col() +
+  data.frame(x = seq(0, nrow(df)), p_method1 = .) %>%
+  mutate(p_method2 = PoissonBinomial::dpbinom(x = x,
+                                              probs = df[, var_states] %>%
+                                                rowSums(),
+                                              log = FALSE,
+                                              method = "Normal")) %>%
+  ggplot(aes(x = x)) +
+  geom_vline(xintercept = 1, linetype = 1, color = "black") +
+  geom_col(aes(y = p_method1), fill = "salmon", alpha = 0.5) +
+  geom_col(aes(y = p_method2), fill = "royalblue", alpha = 0.5) +
   scale_x_continuous(breaks = scales::pretty_breaks()) +
   theme_cowplot()
 
-p_single <- df[, var_states] %>%
+# test with PoissonBinomial package
+a <- df[, var_states] %>%
   rowSums() %>%
-  dpoisbinom(1, pp = ., log_d = TRUE)
-
-p_alt <- df[, var_states] %>%
+  PoissonBinomial::dpbinom(x = 1,
+                           probs = .,
+                           log = TRUE,
+                           method = "Poisson")
+b <- df[, var_states] %>%
   rowSums() %>%
-  dpoisbinom(c(0, seq(2, nrow(df))), pp = ., log_d = FALSE) %>%
-  sum(na.rm = TRUE) %>%
-  log10()
+  PoissonBinomial::dpbinom(x = c(0, seq(2, nrow(df))),
+                            probs = .,
+                            log = TRUE,
+                            method = "Poisson") %>%
+  logSumExp(na.rm = TRUE)
 
-pchisq(-2 * (p_single - p_alt), df = 1, lower.tail = FALSE)
-
+pchisq(-2 * (a - b), df = 1, lower.tail = FALSE)
