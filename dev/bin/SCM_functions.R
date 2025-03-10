@@ -1271,7 +1271,8 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   if (missing(Q)) {
     return(cat("ERROR: 'Q' must be provided.\n"))
   }
-
+  
+  # Generate loci_in_h5f object that is a vector with loci already fully analyzed
   # If h5f exists and overwrite = FALSE, check that last entry was added correctly.
   if (file.exists(h5f_path) & overwrite == FALSE) {
     cat("H5 file exists and overwrite = FALSE.\nChecking last entry...\n")
@@ -1306,7 +1307,27 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                       pull(name)
       }
     }
+
+    # Given that the h5f file exists, check if static levels are present
+    # Check if static groups in h5f
+    if(!all(c("tree", "reps", "Q") %in% h5ls(h5f_path, recursive = FALSE)$name)) {
+      cat("Static levels missing from h5f.\n")
+      if (dryrun == FALSE) {
+        cat("Adding tree, Q, and num. of reps to h5f...\n")
+        h5write(obj = write.tree(phy = tree),
+                file = h5f_path,
+                name = "tree")
+        h5write(obj = scm_its,
+                file = h5f_path,
+                name = "reps")
+        h5write(obj = as.data.frame(Q) %>% 
+                        rownames_to_column(var = "from"),
+                file = h5f_path,
+                name = "Q")
+      }
+    }
   } else {
+    # If h5f does not exist or overwrite = T, set loci_in_h5f to NULL
     loci_in_h5f <- NULL
   }
 
@@ -1337,24 +1358,6 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
             name = "Q")
   }
 
-  # If h5f exists, but static levels are missing, add them
-  if (file.exists(h5f_path) & !all(c("tree", "reps", "Q") %in% h5ls(h5f_path, recursive = FALSE)$name)) {
-    cat("Static levels missing from h5f.\n")
-    if (dryrun == FALSE) {
-      cat("Adding tree, Q, and num. of reps to h5f...\n")
-      h5write(obj = write.tree(phy = tree),
-              file = h5f_path,
-              name = "tree")
-      h5write(obj = scm_its,
-              file = h5f_path,
-              name = "reps")
-      h5write(obj = as.data.frame(Q) %>% 
-                      rownames_to_column(var = "from"),
-              file = h5f_path,
-              name = "Q")
-    }
-  }
-
   # If h5f does not exist, create h5f file and groups
   if (!file.exists(h5f_path) & dryrun == FALSE) {
     cat("Creating new H5 file...\n")
@@ -1377,6 +1380,10 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                     rownames_to_column(var = "from"),
             file = h5f_path,
             name = "Q")
+  }
+
+  if (!file.exists(h5f_path) & dryrun == TRUE) {
+    cat(paste0(h5f_path," not found and will be created.\n"))
   }
 
   ######## PREP SCM LOOP ########
@@ -1414,12 +1421,15 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
 
   ######## RUN SCM LOOP ########
   cat("Running SCM...\n")
-  pb.tick()
+  pb$tick()
   
   # Loop through all locis in gt_state_list with chr_str and run SCM
   for (i in 1:n_rec){
-    # If locus already in h5f and overwrite = FALSE, skip
     start_time <- Sys.time()
+
+    # Test probability of mutation being a singleton
+    p_singleton <- singleton_lrt(x = loci[i], 
+                                 gt_state_list = gt_state_list)
     
     # Run SCM
     scm <- runSCM_single(x = loci[i],
@@ -1469,7 +1479,8 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                     "muts95low" = sum(scm$hpd_counts$lower_95hpd),
                     "muts95high" = sum(scm$hpd_counts$upper_95hpd),
                     "muts_assigned" = sum(scm$assigned_edges),
-                    "QlogL" = scm$QlogL)
+                    "QlogL" = scm$QlogL,
+                    "p_singleton" = p_singleton)
     h5write(obj = summary_df, 
             file = h5f_path, 
             name = paste0("summary/", loci[i]))
