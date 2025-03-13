@@ -143,25 +143,50 @@ for (i in sample(names(gt_list.snp), size = 20, replace = FALSE)) {
 
 ##### HDF5 TESTS #####
 source("dev/bin/SCM_functions.R")
-# file.remove("dev/data/test.h5")
+
+# Run multi_scm
 multi_scm(gt_state_list = gt_list.snp,
           tree = tr,
           Q = snp.q,
           scm_its = 100,
-          cores = 16,
-          h5f_path = "dev/data/test.h5",
+          cores = 6,
+          h5f_path = "dev/data/test1_with_psingleton.h5",
           chr = "all",
           overwrite = FALSE,
-          dryrun = TRUE)
+          dryrun = FALSE)
+add_scaled_tree_to_h5f(h5f_path = "dev/data/test1_with_psingleton.h5",
+                       overwrite = FALSE)
 
-h5 <- H5Fopen("dev/data/test.h5")
-h5_summary <- bind_rows(h5$`summary`) %>%
+## Read multi_scm h5f output
+h5 <- H5Fopen("dev/data/test1_with_psingleton.h5")
+
+## Read summary data into df
+h5_summary <- bind_rows(h5$summary) %>%
               tibble()
-events <- lapply(h5$`assigned_edges`, sum) %>%
-  unlist() %>%
-  stack()
+
+## Read burden-scaled tree
+tr_mutbrdn <- read.tree(text = h5$scm_scaled_tree)
+
+## Close h5f
 h5closeAll()
 
+# Plot trees
+tr_l <- list(tr, tr_mutbrdn)
+names(tr_l) <- c("CellPhy", "SCM-scaled")
+class(tr_l) <- "multiPhylo"
+
+ggtree(tr_l, aes(color = .id), size = 1) +
+  scale_color_manual(values = c("CellPhy" = "gray50", "SCM-scaled" = "royalblue"), 
+                     guide = "none") +
+  facet_wrap(.id ~ ., 
+             scales = "free") +
+  theme_tree2() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold", size = 16),
+        axis.text.x = element_text(size = 12),
+        legend.position = "none")
+
+# Plot scm summaries
 ggplot(h5_summary %>% rownames_to_column(var = "index")) +
   geom_point(aes(y = runtime / iterations, x = index, color = QlogL), alpha = 0.5) +
   scale_y_continuous(breaks = scales::pretty_breaks()) +
@@ -187,7 +212,7 @@ ggplot(h5_summary %>%
        y = "95% HPD upper bound",
        fill = "log10(count)")
 
-ggplot(events, aes(x = values)) +
+ggplot(h5_summary, aes(x = muts_assigned)) +
   geom_histogram(binwidth = 1, fill = "lightblue", color = "black") +
   scale_y_log10() +
   scale_x_continuous(breaks = seq(0,6,1)) +
@@ -196,36 +221,21 @@ ggplot(events, aes(x = values)) +
        y = "Count")
 
 h5_summary %>%
-  mutate(HPDrange = (muts95high - muts95low) + 1) %>%
-  group_by(HPDrange,muts_assigned) %>%
-  summarise(count = n()) %>%
-  ggplot(aes(y = muts_assigned, x = HPDrange, fill = log10(count))) +
-    geom_tile() +
-    geom_label(aes(label = count), fill = "white", size = 6) +
-    coord_equal() +
-    scale_fill_viridis(option = "A", begin = 0.25, guide = "none") +
-    theme_cowplot() +
-    theme(panel.background = element_rect(fill = "black"),
-          axis.title = element_text(size = 24, face = "bold")) +
-    labs(x = "Mutation events range (95% HPD, inclusive)",
-         y = "Assigned mutations (PP ≥ 95%)")
-
-ggplot(h5_summary, 
-       aes(x = as.factor(muts_assigned),
-           y = QlogL)) +
-  geom_hline(yintercept = 0, linetype = 2, color = "gray80") +
-  geom_quasirandom() +
+  ggplot(aes(x = as.factor(muts_assigned),
+             y = -log10(p_singleton),
+             color = as.factor(muts_assigned))) +
+  geom_point(position = "jitter", size = 4, alpha = 0.5) +
+  geom_hline(yintercept = -log10(0.05)) +
   scale_y_continuous(breaks = scales::pretty_breaks()) +
-  theme_cowplot() +
-  labs(x = "Assigned mutations (PP ≥ 95%)",
-       y = "Q matrix log-likelihood")
+  scale_color_brewer(palette = "Set2", guide = "none") +
+  theme_cowplot()
 
-##### TESTING PRIOR FOR SIMPLIFYING METHODS #####
-# Use poisson-binomial method to perform a likelihood ratio test on whether a variant
-# has evidence of being a singleton
+
+##### POISSON-BINOMIAL FOR TESTING SINGLETONS #####
 
 ## Create example data
 var <- sample(names(gt_list.snp), size = 1)
+# var <- "chr1_152514150"
 singleton_lrt(x = var, gt_state_list = gt_list.snp)
 df <- tibble(gt_list.snp[[var]]) %>%
   select_if(~ !is.numeric(.) || sum(.) != 0)
@@ -251,8 +261,12 @@ scm_example <- runSCM_single(x = var,
                              gt_state_list = gt_list.snp,
                              Qmat = snp.q,
                              reduced = FALSE,
-                             reps = 100,
-                             cores = 8)
+                             reps = 1000,
+                             cores = 6)
+
+summarise_scm.snp(multiSimmap = scm_example,
+                  locus = var,
+                  plot = TRUE)
 
 plot_state_probs_on_tree(locus_str = var,
                          gt_state_list = gt_list.snp,
@@ -260,54 +274,3 @@ plot_state_probs_on_tree(locus_str = var,
                                                          locus = var,
                                                          plot = FALSE),
                          tree = tr)
-
-## If prior consensus state is the het state, perform SCM
-## If the prior consensus state is not the prior, proceed to next step
-
-## Pull states
-states <- df %>%
-  select(!c(locus, Indiv)) %>%
-  colnames()
-
-## Pull consensus state (max of mean priors)
-prior_con <- df %>%
-  select(!c(locus, Indiv)) %>%
-  colMeans() %>%
-  .[which.max(.)] %>%
-  names()
-
-## Pull potential mutant states (given diploid site)
-var_states <- states[states != prior_con]
-
-df[, var_states] %>%
-  rowSums() %>%
-  dpoisbinom(seq(0, nrow(df)), pp = .) %>% 
-  data.frame(x = seq(0, nrow(df)), p_method1 = .) %>%
-  mutate(p_method2 = PoissonBinomial::dpbinom(x = x,
-                                              probs = df[, var_states] %>%
-                                                rowSums(),
-                                              log = FALSE,
-                                              method = "Normal")) %>%
-  ggplot(aes(x = x)) +
-  geom_vline(xintercept = 1, linetype = 1, color = "black") +
-  geom_col(aes(y = p_method1), fill = "salmon", alpha = 0.5) +
-  geom_col(aes(y = p_method2), fill = "royalblue", alpha = 0.5) +
-  scale_x_continuous(breaks = scales::pretty_breaks()) +
-  theme_cowplot()
-
-# test with PoissonBinomial package
-a <- df[, var_states] %>%
-  rowSums() %>%
-  PoissonBinomial::dpbinom(x = 1,
-                           probs = .,
-                           log = TRUE,
-                           method = "Poisson")
-b <- df[, var_states] %>%
-  rowSums() %>%
-  PoissonBinomial::dpbinom(x = c(0, seq(2, nrow(df))),
-                            probs = .,
-                            log = TRUE,
-                            method = "Poisson") %>%
-  logSumExp(na.rm = TRUE)
-
-pchisq(-2 * (a - b), df = 1, lower.tail = FALSE)

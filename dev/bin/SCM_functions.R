@@ -1493,29 +1493,52 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   }
 }
 
-# #* Aggregated data from SCM h5f file
-# h5f_scm_gather <- function(h5f_path) {
-#   # ARGUMENTS:
-#   #   - h5f_path:
-#   #       Path to h5f file
+#* Add scm-scaled scaled tree to h5f file 
+add_scaled_tree_to_h5f <- function(h5f_path, overwrite = FALSE) {
+  # ARGUMENTS:
+  #   - h5f_path:
+  #       Path to h5f file
 
-#   # Read in h5f file
-#   h5f <- h5read(h5f_path)
+  # If overwrite = FALSE, test if scm_scaled_tree already exists in h5f
+  if (!overwrite) {
+    if("scm_scaled_tree" %in% h5ls(h5f_path, recursive = FALSE)$name) {
+      stop("scm_scaled_tree already exists in h5f", call. = FALSE)
+    }
+  } else {
+    try(h5delete(h5f_path, "scm_scaled_tree"), silent = TRUE)
+  }
 
-#   # Gather SCM results
-#   scm_summary <- h5f$summary %>% as.data.frame()
-#   gt_posteriors <- h5f$gt_posteriors %>% as.data.frame()
-#   assigned_edges <- h5f$assigned_edges %>% as.data.frame()
-#   consensus_posteriors <- h5f$consensus_posteriors %>% as.data.frame()
-#   hpd_counts <- h5f$hpd_counts %>% as.data.frame()
+  # Open h5
+  h5 <- H5Fopen(h5f_path)
 
-#   # Return list of dataframes
-#   return(list("summary" = scm_summary,
-#               "gt_posteriors" = gt_posteriors,
-#               "assigned_edges" = assigned_edges,
-#               "consensus_posteriors" = consensus_posteriors,
-#               "hpd_counts" = hpd_counts))
-# }
+  # Test that all edge vectors are the same length
+  x <- h5$`assigned_edges` %>%
+    lapply(length) %>%
+    unlist() %>%
+    unique()
+  if (length(x) > 1) {
+    stop("Edge vectors are not the same length", call. = FALSE)
+  }
+
+  # Sum across all edge vectors
+  edge_burdens <- h5$`assigned_edges` %>%
+    lapply(unlist) %>%
+    do.call(what = cbind) %>%
+    t() %>%
+    colSums()
+
+  # Assign edge lengths to tree
+  tr_mutbrdn <- tr
+  tr_mutbrdn$edge.length <- edge_burdens
+
+  # Close h5
+  h5closeAll()
+
+  # Write burden-scaled tree to h5
+  h5write(obj = write.tree(phy = tr_mutbrdn),
+                  file = h5f_path,
+                  name = "scm_scaled_tree")
+}
 
 ####* PLOTTING FUNCTIONS *####
 #* Plot relationship between genotype state priors and posteriors on a phylogeny
