@@ -1271,6 +1271,55 @@ rm_locus_from_h5f <- function(loc_str, h5f) {
   try(h5delete(h5f, paste0("/summary/", loc_str)), silent = TRUE)
 }
 
+#* Check if locus entered into all levels of h5f
+check_locus_in_h5f <- function(loc_str, h5f_group_df) {
+  # ARGUMENTS:
+  #   - loc_str:
+  #       String; name of locus for which SCM was run
+  #   - h5f_group_df:
+  #       h5f group df generated using the following function: 
+  #       h5ls("path/to/filename.h5", recursive = T) %>% filter(! group == "/")
+
+  # Check if locus is present in all levels of h5f
+  if (nrow(h5f_group_df %>% filter(name == loc_str)) != 5) {
+    return(FALSE)
+  } else {
+    return(TRUE)
+  }
+}
+
+#* Check h5f that all entries were added correctly
+check_h5f_entries <- function(h5f_path) {
+  # ARGUMENTS:
+  #   - h5f_path:
+  #       Path to h5f file
+
+  # Create a dataframe with all groups in h5f
+  df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
+
+  # Pull each unique locus name from h5f groups
+  entries <- df %>% 
+    pull(name) %>%
+    unique()
+
+  # Create a logical vector to check if each locus is present in all groups of h5f
+  test_vector <- lapply(entries, function(x) {
+    check_locus_in_h5f(loc_str = x,
+                       h5f_group_df = df)
+  }) %>% unlist()
+
+  # If any values in test_vector are FALSE, remove them from h5
+  if (sum(!test_vector) == 0) {
+    cat("All entries added correctly.\n")
+    return(invisible(TRUE))
+  } else {
+    cat("Some entries not properly entered into h5f.\n")
+    cat("Errors in the following entries:\n")
+    print(entries[!test_vector])
+    return(invisible(FALSE))
+  }
+}
+
 #* Run SCM loop for all loci given a chromosome and write results to
 #* h5f file. Run QC on each input.
 #TODO: Add recovery for the following error,
@@ -1326,34 +1375,40 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   }
   
   # Generate loci_in_h5f object that is a vector with loci already fully analyzed
-  # If h5f exists and overwrite = FALSE, check that last entry was added correctly.
+  # If h5f exists and overwrite = FALSE, check that all loci were added correctly
   if (file.exists(h5f_path) & overwrite == FALSE) {
-    cat("H5 file exists and overwrite = FALSE.\nChecking last entry...\n")
+    cat("H5 file exists and overwrite = FALSE.\nChecking entries...\n")
     
-    # Get the last entry from all h5f groups
-    last_entries <- h5ls(h5f_path, recursive = T) %>%
-                    filter(! group == "/") %>% 
-                    group_by(group) %>%
-                    slice(n()) %>% 
-                    pull(name)
+    #Create a dataframe with all groups in h5f
+    df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
 
-    # If all last entries for all h5 levels are the same, all loci were added correctly.
-    # Else, remove last-entry loci frm all levels
-    if (length(unique(last_entries)) == 1) {
-      cat("Last entry added correctly.\n")
-      loci_in_h5f <- h5ls(h5f_path,recursive = T) %>% 
-                     filter(group == "/summary") %>% 
-                     pull(name)
+    #Pull each unique locus name from h5f groups
+    entries <- df %>% 
+               pull(name) %>%
+               unique()
+
+    #Create a logical vector to check if each locus is present in all groups of h5f
+    test_vector <- lapply(entries, function(x) {
+      check_locus_in_h5f(loc_str = x,
+                         h5f_group_df = df)
+    }) %>% unlist()
+
+    # If any values in test_vector are FALSE, remove them from h5
+    if (sum(!test_vector) == 0) {
+      cat("All entries added correctly.\n")
+      loci_in_h5f <- entries
     } else {
-      cat("Last entry not added correctly.\n")
+      cat("Some entries not properly entered into h5f.\n")
       if (dryrun == FALSE) {
-        cat("Removing last entry and restarting...\n")
-        for (x in unique(last_entries)) {
+        cat("Removing failed entries...\n")
+        for (x in entries[!test_vector]) {
           rm_locus_from_h5f(loc_str = x, h5f = h5f_path)
         }
         loci_in_h5f <- h5ls(h5f_path,recursive = T) %>% 
                        filter(group == "/summary") %>% 
                        pull(name)
+      } else {
+        loci_in_h5f <- entries[test_vector]
       }
     }
 
@@ -1524,10 +1579,23 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
       edge_v <- rep(0, nrow(tree$edge))
       edge_v[edge_idx] <- 1
       
-      simplified_scm_to_h5f(assigned_edge_vector = edge_v, 
-                            loc_str = loci[i],
-                            h5f = h5f_path)
-
+      # Write edge vector to h5f
+      tryCatch(
+        expr = {
+          simplified_scm_to_h5f(assigned_edge_vector = edge_v, 
+                                loc_str = loci[i],
+                                h5f = h5f_path)
+        },
+        error = function(e) {
+          try({
+            rm_locus_from_h5f(loc_str = loci[i], h5f = h5f_path)
+            simplified_scm_to_h5f(assigned_edge_vector = edge_v, 
+                                  loc_str = loci[i],
+                                  h5f = h5f_path)
+          }, silent = TRUE)
+        }
+      )
+      
       # End timer
       end_time <- Sys.time()
 
@@ -1550,9 +1618,21 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                       "p_singleton" = p_singleton)
       
       # Write simplified summary to h5f
-      h5write(obj = summary_df, 
-              file = h5f_path, 
-              name = paste0("summary/", loci[i]))
+      tryCatch(
+        expr = {
+          h5write(obj = summary_df, 
+                  file = h5f_path, 
+                  name = paste0("summary/", loci[i]))
+        },
+        error = function(e) {
+          try({
+            h5delete(h5f_path, paste0("summary/", loci[i]), silent = TRUE)
+            h5write(obj = summary_df, 
+                    file = h5f_path, 
+                    name = paste0("summary/", loci[i]))
+          }, silent = TRUE)
+        }
+      )
 
       pb$tick()
       next
@@ -1577,9 +1657,21 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                                     quietly = TRUE)
     
     # Write SCM results to h5f
-    scm_to_h5f(scm_summary = scm,
-               loc_str = loci[i],
-               h5f = h5f_path)
+    tryCatch(
+      expr = {
+          scm_to_h5f(scm_summary = scm,
+                     loc_str = loci[i],
+                     h5f = h5f_path)
+      },
+      error = function(e) {
+        try({
+          rm_locus_from_h5f(loc_str = loci[i], h5f = h5f_path)
+          scm_to_h5f(scm_summary = scm,
+                    loc_str = loci[i],
+                    h5f = h5f_path)
+        }, silent = TRUE)
+      }
+    )
 
     # Pull germline state at PPthreshold
     germ <- scm$gt_posteriors[root_node, ]
@@ -1608,9 +1700,22 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                     "muts_assigned" = sum(scm$assigned_edges),
                     "QlogL" = scm$QlogL,
                     "p_singleton" = p_singleton)
-    h5write(obj = summary_df, 
-            file = h5f_path, 
-            name = paste0("summary/", loci[i]))
+
+    tryCatch(
+      expr = {
+        h5write(obj = summary_df, 
+                file = h5f_path, 
+                name = paste0("summary/", loci[i]))
+      },
+      error = function(e) {
+        try({
+          h5delete(h5f_path, paste0("summary/", loci[i]), silent = TRUE)
+          h5write(obj = summary_df, 
+                  file = h5f_path, 
+                  name = paste0("summary/", loci[i]))
+        }, silent = TRUE)
+      }
+    )
 
     pb$tick()
   }
