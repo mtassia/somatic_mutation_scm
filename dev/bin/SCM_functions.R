@@ -1255,6 +1255,22 @@ simplified_scm_to_h5f <- function(assigned_edge_vector, loc_str, h5f) {
           name = paste0("hpd_counts/", loc_str))
 }
 
+#* Delete locus from h5f
+rm_locus_from_h5f <- function(loc_str, h5f) {
+  # ARGUMENTS:
+  #   - loc_str:
+  #       String; name of locus for which SCM was run
+  #   - h5f_path:
+  #       Path to write h5f file
+
+  # Remove locus from h5f at all levels present
+  try(h5delete(h5f, paste0("/gt_posteriors/", loc_str)), silent = TRUE)
+  try(h5delete(h5f, paste0("/assigned_edges/", loc_str)), silent = TRUE)
+  try(h5delete(h5f, paste0("/consensus_posteriors/", loc_str)), silent = TRUE)
+  try(h5delete(h5f, paste0("/hpd_counts/", loc_str)), silent = TRUE)
+  try(h5delete(h5f, paste0("/summary/", loc_str)), silent = TRUE)
+}
+
 #* Run SCM loop for all loci given a chromosome and write results to
 #* h5f file. Run QC on each input.
 #TODO: Add recovery for the following error,
@@ -1333,15 +1349,11 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
       if (dryrun == FALSE) {
         cat("Removing last entry and restarting...\n")
         for (x in unique(last_entries)) {
-          try(h5delete(h5f_path, paste0("/gt_posteriors/", x)), silent = TRUE)
-          try(h5delete(h5f_path, paste0("/assigned_edges/", x)), silent = TRUE)
-          try(h5delete(h5f_path, paste0("/consensus_posteriors/", x)), silent = TRUE)
-          try(h5delete(h5f_path, paste0("/hpd_counts/", x)), silent = TRUE)
-          try(h5delete(h5f_path, paste0("/summary/", x)), silent = TRUE)
+          rm_locus_from_h5f(loc_str = x, h5f = h5f_path)
         }
         loci_in_h5f <- h5ls(h5f_path,recursive = T) %>% 
-                      filter(group == "/summary") %>% 
-                      pull(name)
+                       filter(group == "/summary") %>% 
+                       pull(name)
       }
     }
 
@@ -1511,7 +1523,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
       # create edge vector to capture the assigned edge
       edge_v <- rep(0, nrow(tree$edge))
       edge_v[edge_idx] <- 1
-
+      
       simplified_scm_to_h5f(assigned_edge_vector = edge_v, 
                             loc_str = loci[i],
                             h5f = h5f_path)
@@ -1533,7 +1545,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                       ),
                       "muts95low" = NA,
                       "muts95high" = NA,
-                      "muts_assigned" = NA,
+                      "muts_assigned" = 1,
                       "QlogL" = NA,
                       "p_singleton" = p_singleton)
       
