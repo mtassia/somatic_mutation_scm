@@ -142,6 +142,7 @@ for (i in sample(names(gt_list.snp), size = 20, replace = FALSE)) {
 #         plot.title = element_text(hjust = 0.5, face = "bold"))
 
 ##### HDF5 TESTS #####
+h5_str <- "dev/data/chr22.h5"
 source("dev/bin/SCM_functions.R")
 
 # Run multi_scm
@@ -149,16 +150,17 @@ multi_scm(gt_state_list = gt_list.snp,
           tree = tr,
           Q = snp.q,
           scm_its = 100,
-          cores = 6,
-          h5f_path = "dev/data/test1_with_psingleton.h5",
-          chr = "all",
+          cores = 16,
+          h5f_path = h5_str,
+          chr = "chr22",
           overwrite = FALSE,
-          dryrun = FALSE)
-add_scaled_tree_to_h5f(h5f_path = "dev/data/test1_with_psingleton.h5",
+          dryrun = FALSE,
+          brute = FALSE)
+add_scaled_tree_to_h5f(h5f_path = h5_str,
                        overwrite = FALSE)
 
 ## Read multi_scm h5f output
-h5 <- H5Fopen("dev/data/test1_with_psingleton.h5")
+h5 <- H5Fopen(h5_str)
 
 ## Read summary data into df
 h5_summary <- bind_rows(h5$summary) %>%

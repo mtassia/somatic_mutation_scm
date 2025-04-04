@@ -4,11 +4,8 @@ channels:
   - r
   - bioconda
 dependencies:
-  - radian
   - r-base
   - r-optparse
-  - r-languageserver
-  - r-httpgd
   - r-tidyverse
   - r-biocmanager
   - r-data.table
@@ -17,14 +14,8 @@ dependencies:
   - r-vcfr
   - r-ape
   - r-phytools
-  - r-cowplot
-  - r-rcolorbrewer
   - r-parallel
-  - r-ggtext
-  - r-aplot
-  - r-viridis
   - r-poissonbinomial
   - r-matrixstats
-  - bioconductor-ggtree
   - bioconductor-rhdf5
 
