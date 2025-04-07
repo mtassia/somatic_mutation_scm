@@ -1,32 +1,17 @@
 ####* INSTALL/LOAD LIBRARIES *####
 cran_packages <- c("BiocManager", "tidyverse", "data.table",
                     "pbapply", "pbmcapply", "vcfR",
-                    "ape", "phytools", "cowplot",
-                    "RColorBrewer", "snow", "markophylo",
-                    "ggtext", "progress", "parallel",
-                    "viridis", "aplot", "matrixStats",
-                    "PoissonBinomial")
+                    "ape", "phytools", "progress", "parallel",
+                    "matrixStats", "PoissonBinomial")
 
 for (pkg in cran_packages) {
-  if (!require(pkg, character.only = TRUE)) {
-    install.packages(pkg, dependencies = TRUE)
-    library(pkg, quietly = TRUE)
-  } else {
-    library(pkg, character.only = TRUE, quietly = TRUE)
-  }
+  library(pkg, character.only = TRUE, quietly = TRUE)
 }
 
-biconductor_packages <- c("ggtree","rhdf5")
+biconductor_packages <- c("rhdf5")
 for (pkg in biconductor_packages) {
-  if (!require(pkg, character.only = TRUE)) {
-    BiocManager::install(pkg, dependencies = TRUE)
-    library(pkg, quietly = TRUE)
-  } else {
-    library(pkg, character.only = TRUE, quietly = TRUE)
-  }
+  library(pkg, character.only = TRUE, quietly = TRUE)
 }
-
-####* TREE PARSING *####
 
 ####* DATA PREP *####
 
@@ -54,7 +39,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   #       per variant locus (TRUE) or a single long datatable
   
   # Read VCF with vcfR
-  print("Reading vcf data...")
+  cat("Reading vcf data...\n")
 
   # Convert vcfR object to tidy list of tibbles
   tidy_vcf <- vcfR2tidy(vcf,
@@ -78,7 +63,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
                   by = c("CHROM", "POS"))
 
   # Compute genotype priors from genotype likelihood (PL) fields
-  print("Computing genotype prior probabilities...")
+  cat("Computing genotype prior probabilities...\n")
 
   # 1. Add field to dataframe that converts genotype code (e.g., 0/1) to
   #     a string reflecting the diploid genotype state (e.g., AG).
@@ -107,7 +92,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
     mutate(Pref = unphred(c(PL_ref, PL_het, PL_alt))[1],
            Phet = unphred(c(PL_ref, PL_het, PL_alt))[2],
            Palt = unphred(c(PL_ref, PL_het, PL_alt))[3])
-  
+
   # Rearrange data frame and convert to data table for faster access
   df <- df %>%
     arrange(CHROM, POS) %>%
@@ -120,7 +105,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   if (mat_list == FALSE){
     return(df)
   } else {
-    print("Assembling genotype prior state matrices for SNPs...")
+    cat("Assembling genotype prior state matrices for SNPs...\n")
 
     # Subset datatable to SNP loci using REF and ALT character string matching
     df.snp <- df %>%
@@ -480,14 +465,14 @@ runSCM_single <- function(x, tree, gt_state_list,
   
   # Run phytools::make.simmap() using all cores specified in <cl>
   scm <- parLapply(cl,
-                      x = replicate(cores,
-                                    as.matrix(gt_matrix),
-                                    simplify = FALSE),
-                      fun = make.simmap,
-                      tree = tree,
-                      Q = Qmat,
-                      pi = root_state,
-                      nsim = as.integer(round(reps / cores))) %>%
+                   X = replicate(cores,
+                                 as.matrix(gt_matrix),
+                                 simplify = FALSE),
+                   fun = make.simmap,
+                   tree = tree,
+                   Q = Qmat,
+                   pi = root_state,
+                   nsim = as.integer(round(reps / cores))) %>%
          do.call("c", .)
   
   # Reclass simmap if not properly classed by output above
@@ -868,6 +853,12 @@ check_h5f_entries <- function(h5f_path) {
   # Create a dataframe with all groups in h5f
   df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
 
+  # Check if h5f is empty
+  if (nrow(df) == 0) {
+    cat("H5 file is empty.\n")
+    return(invisible(TRUE))
+  }
+
   # Pull each unique locus name from h5f groups
   entries <- df %>% 
     pull(name) %>%
@@ -942,6 +933,16 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     return(cat("ERROR: 'Q' must be provided.\n"))
   }
   
+  # If h5 file exists, but is empty, remove it
+  if (file.exists(h5f_path)) {
+    df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
+    if (nrow(df) == 0) {
+      cat("H5 file is empty.\n")
+      cat("Removing...\n")
+      file.remove(h5f_path)
+    }
+  }
+
   # Generate loci_in_h5f object that is a vector with loci already fully analyzed
   # If h5f exists and overwrite = FALSE, check that all loci were added correctly
   if (file.exists(h5f_path) & overwrite == FALSE) {
@@ -1060,7 +1061,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
 
   # If h5f does not exist and dryrun = TRUE, return message and exit
   if (!file.exists(h5f_path) & dryrun == TRUE) {
-    cat(paste0(h5f_path," not found and will be created.\n"))
+    cat(paste0("Output file [", h5f_path,"] will be created.\n"))
   }
 
   ######## PREP SCM LOOP ########

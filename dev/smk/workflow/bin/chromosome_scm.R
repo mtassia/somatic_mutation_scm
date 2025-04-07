@@ -2,7 +2,6 @@
 
 cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
                   " Loading libraries...\n")))
-suppressMessages(source("../src/SCM.smk.R"))
 library(optparse)
 
 # Read command line arguments
@@ -10,6 +9,10 @@ option_list <- list(
   make_option(c("-v", "--vcf"),
               type = "character",
               help = "VCF file (<vcf>.gz)",
+              metavar = "character"),
+  make_option(c("-f", "--functions"),
+              type = "character",
+              help = "Path to functions file (/path/to/SCM.smk.R)",
               metavar = "character"),
   make_option(c("-t", "--tree"),
               type = "character",
@@ -70,6 +73,11 @@ if (any(sapply(required_args, is.null))) {
     stop("All required arguments (vcf, tree, model, prefix, and outgroup) must be provided.", call. = FALSE)
 }
 
+#### Load functions ####
+cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
+                  " Loading functions...\n")))
+source(opt$functions)
+
 ##### Data import #####
 #Read tree
 cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
@@ -82,12 +90,12 @@ tr <- read.tree(file = opt$tree) %>%
 #Read vcf
 cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
                   " Reading vcf...\n")))
-vcf <- read.vcfR(file = opt$vcf)
+dat <- read.vcfR(file = opt$vcf, verbose = FALSE)
 
 #Compose genotype state list
 cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
                   " Generating genotype state list...\n")))
-gt_list.snp <- compile_gt_states.snp(vcf)
+gt_list.snp <- compile_gt_states.snp(dat)
 
 #Prep Q matrices
 cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
@@ -105,6 +113,6 @@ multi_scm(gt_state_list = gt_list.snp,
           cores = opt$threads,
           h5f_path = paste0(opt$prefix, ".h5"),
           chr = opt$chromosome,
-          overwrite = FALSE,
-          dryrun = FALSE,
-          brute = FALSE)
+          overwrite = opt$overwrite,
+          dryrun = opt$dryrun,
+          brute = opt$brute)

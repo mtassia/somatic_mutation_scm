@@ -14,7 +14,7 @@ dependencies:
   - r-vcfr
   - r-ape
   - r-phytools
-  - r-parallel
+  - r-parallelly
   - r-poissonbinomial
   - r-matrixstats
   - bioconductor-rhdf5
