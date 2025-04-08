@@ -1722,12 +1722,14 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
 }
 
 #* Add scm-scaled scaled tree to h5f file 
-add_scaled_tree_to_h5f <- function(h5f_path, phylo, overwrite = FALSE, merged = FALSE) {
+add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = FALSE, merged = FALSE) {
   # ARGUMENTS:
   #   - h5f_path:
   #       Path to h5f file
   #   - phylo:
   #       Phylo object
+  #   - write:
+  #       Boolean; if TRUE, write the tree to h5f (default = FALSE)
   #   - overwrite:
   #       Boolean; overwrite h5f file if it exists (default = FALSE)
   #   - merged:
@@ -1770,9 +1772,11 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, overwrite = FALSE, merged = 
     h5closeAll()
 
     # Write burden-scaled tree to h5
-    h5write(obj = write.tree(phy = tr_mutbrdn),
-                    file = h5f_path,
-                    name = "scm_scaled_tree")
+    if (write) {
+      h5write(obj = write.tree(phy = tr_mutbrdn),
+              file = h5f_path,
+              name = "scm_scaled_tree")
+    }
   } else {
     # Read groups from h5f
     groups <- h5ls(h5f_path, recursive = FALSE)$name
@@ -1806,10 +1810,13 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, overwrite = FALSE, merged = 
     tr_mutbrdn$edge.length <- edge_burdens
 
     # Write burden-scaled tree to h5
-    h5write(obj = write.tree(phy = tr_mutbrdn),
-                    file = h5f_path,
-                    name = "scm_scaled_tree")
+    if (write) {
+      h5write(obj = write.tree(phy = tr_mutbrdn),
+              file = h5f_path,
+              name = "scm_scaled_tree")
+    }
   }
+  return(tr_mutbrdn)
 }
 
 #* Merge multiple h5f files into one; this output will have a group for each

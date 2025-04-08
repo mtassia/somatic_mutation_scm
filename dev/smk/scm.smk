@@ -57,10 +57,13 @@ chrom = ["chr" + str(c) for c in list(range(1, 23))]
 #--- RULES ---#
 localrules:
     all,
+    write_tree
 
 rule all:
     input:
         expand("output/merged/{sample}.h5",
+                sample=config["input"]["vcfs"].keys()),
+        expand("output/trees/{sample}.scm.nwk",
                 sample=config["input"]["vcfs"].keys())
 
 rule scm_chromosome:
@@ -119,16 +122,25 @@ rule merge_h5:
             -o {output.h5}
         """
 
-#rule write_tree:
-#    input:
-#        h5 = rules.merge_h5.output.h5,
-#        script = ,
-#        functions = "workflow/src/SCM.smk.R"
-#    output:
-#        tree = "output/merged/{sample}.scm.nwk"
-#    conda:
-#        "workflow/envs/scm.yaml"
-#    shell:
-#        """
-#        
-#        """
+rule write_tree:
+    input:
+        h5 = rules.merge_h5.output.h5,
+        script = "workflow/bin/write_burden_to_tree.R",
+        functions = "workflow/src/SCM.smk.R",
+        tree = lambda wildcards: config["input"]["trees"][wildcards.sample]
+    output:
+        tree = "output/trees/{sample}.scm.nwk"
+    params: 
+        outgroup = lambda wildcards: config["input"]["outgroup"][wildcards.sample],
+    conda:
+        "workflow/envs/scm.yaml"
+    shell:
+        """
+        Rscript {input.script} \
+           --functions {input.functions} \
+           --input {input.h5} \
+           --tree {input.tree} \
+           --output {output.tree} \
+           --outgroup {params.outgroup} \
+           --merged
+        """
