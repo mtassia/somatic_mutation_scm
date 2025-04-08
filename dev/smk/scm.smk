@@ -60,9 +60,8 @@ localrules:
 
 rule all:
     input:
-        expand("output/{sample}.{chrom}.h5",
-                sample=config["input"]["vcfs"].keys(),
-                chrom=chrom)
+        expand("output/merged/{sample}.h5",
+                sample=config["input"]["vcfs"].keys())
 
 rule scm_chromosome:
     input:
@@ -72,7 +71,7 @@ rule scm_chromosome:
         script = "workflow/bin/chromosome_scm.R",
         functions = "workflow/src/SCM.smk.R"
     output:
-        h5 = "output/{sample}.{chrom}.h5"
+        h5 = temp("output/{sample}.{chrom}.h5")
     params:
         outgroup = lambda wildcards: config["input"]["outgroup"][wildcards.sample],
         prefix = "output/{sample}.{chrom}",
@@ -97,22 +96,39 @@ rule scm_chromosome:
             -c {wildcards.chrom}
         """
 
-#rule merge_h5:
+rule merge_h5:
+    input:
+        h5_files = lambda wildcards: expand("output/{sample}.{chrom}.h5",
+                          sample=wildcards.sample,      
+                          chrom=chrom),
+        script = "workflow/bin/merge_scm_h5.R",
+        functions = "workflow/src/SCM.smk.R"
+    output:
+        h5 = "output/merged/{sample}.h5"
+    params:
+        h5_files_str = lambda w, input:",".join(input.h5_files)
+    resources:
+        time = "1:00:00"
+    conda:
+        "workflow/envs/scm.yaml"
+    shell:
+        """
+        Rscript {input.script} \
+            -f {input.functions} \
+            -i {params.h5_files_str} \
+            -o {output.h5}
+        """
+
+#rule write_tree:
 #    input:
-#        expand("output/{sample}.{chrom}.h5",
-#                sample=config["input"]["vcfs"].keys(),
-#                chrom=chrom)
+#        h5 = rules.merge_h5.output.h5,
+#        script = ,
+#        functions = "workflow/src/SCM.smk.R"
 #    output:
-#        "output/{sample}.h5"
-#    params:
-#        prefix = "output/{sample}"
-#    resources:
-#        time = "24:00:00",
-#        mem_mb = config["run_params"]["mem_mb"]
-#    threads:
-#        config["run_params"]["n_threads"]
+#        tree = "output/merged/{sample}.scm.nwk"
 #    conda:
 #        "workflow/envs/scm.yaml"
 #    shell:
 #        """
+#        
 #        """

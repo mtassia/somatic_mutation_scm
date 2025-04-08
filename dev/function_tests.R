@@ -5,7 +5,7 @@ par(mar = rep(5, 4))
 ##### Data import #####
 #Read tree
 tr<-read.tree(file=paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.supportFBP")) %>%
-  root(outgroup="outgroup", resolve.root = T) %>%
+  root(outgroup = "outgroup", resolve.root = T) %>%
   drop.tip("outgroup") %>%
   ladderize()
 #tr<-collapse_poor_supported_edges(tr,90)
@@ -142,7 +142,7 @@ for (i in sample(names(gt_list.snp), size = 20, replace = FALSE)) {
 #         plot.title = element_text(hjust = 0.5, face = "bold"))
 
 ##### HDF5 TESTS #####
-h5_str <- "dev/data/chr22.h5"
+h5_str <- "dev/data/chr21_deleteme.h5"
 source("dev/bin/SCM_functions.R")
 
 # Run multi_scm
@@ -152,12 +152,14 @@ multi_scm(gt_state_list = gt_list.snp,
           scm_its = 100,
           cores = 16,
           h5f_path = h5_str,
-          chr = "chr22",
+          chr = "chr21",
           overwrite = FALSE,
           dryrun = FALSE,
           brute = FALSE)
 add_scaled_tree_to_h5f(h5f_path = h5_str,
-                       overwrite = FALSE)
+                       phylo = tr,
+                       overwrite = FALSE,
+                       merged = FALSE)
 
 ## Read multi_scm h5f output
 h5 <- H5Fopen(h5_str)
@@ -172,7 +174,23 @@ tr_mutbrdn <- read.tree(text = h5$scm_scaled_tree)
 ## Close h5f
 h5closeAll()
 
-# Plot trees
+# Merging h5f files
+source("dev/bin/SCM_functions.R")
+
+try(file.remove("dev/data/merged.h5"))
+merge_h5_files(h5f_paths = c("chr20" = "dev/data/chr20.h5",
+                              "chr21" = "dev/data/chr21.h5",
+                              "chr22" = "dev/data/chr22.h5"),
+                new_h5_name = "dev/data/merged.h5")
+
+h5ls("dev/data/merged.h5", recursive = FALSE)
+
+add_scaled_tree_to_h5f(h5f_path = "dev/data/merged.h5",
+                       phylo = tr,
+                       overwrite = FALSE,
+                       merged = TRUE)
+
+##### PLOTTING #####
 tr_l <- list(tr, tr_mutbrdn)
 names(tr_l) <- c("CellPhy", "SCM-scaled")
 class(tr_l) <- "multiPhylo"

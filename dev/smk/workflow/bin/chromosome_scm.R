@@ -1,7 +1,4 @@
 #!/usr/bin/env Rscript
-
-cat(paste0(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
-                  " Loading libraries...\n")))
 library(optparse)
 
 # Read command line arguments

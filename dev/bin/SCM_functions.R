@@ -2,7 +2,7 @@
 cran_packages <- c("BiocManager", "tidyverse", "data.table",
                     "pbapply", "pbmcapply", "vcfR",
                     "ape", "phytools", "cowplot",
-                    "RColorBrewer", "snow", "markophylo",
+                    "RColorBrewer", "markophylo",
                     "ggtext", "progress", "parallel",
                     "viridis", "aplot", "matrixStats",
                     "PoissonBinomial")
@@ -70,7 +70,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   #       per variant locus (TRUE) or a single long datatable
   
   # Read VCF with vcfR
-  print("Reading vcf data...")
+  cat("Reading vcf data...\n")
 
   # Convert vcfR object to tidy list of tibbles
   tidy_vcf <- vcfR2tidy(vcf,
@@ -94,7 +94,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
                   by = c("CHROM", "POS"))
 
   # Compute genotype priors from genotype likelihood (PL) fields
-  print("Computing genotype prior probabilities...")
+  cat("Computing genotype prior probabilities...\n")
 
   # 1. Add field to dataframe that converts genotype code (e.g., 0/1) to
   #     a string reflecting the diploid genotype state (e.g., AG).
@@ -136,7 +136,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   if (mat_list == FALSE){
     return(df)
   } else {
-    print("Assembling genotype prior state matrices for SNPs...")
+    cat("Assembling genotype prior state matrices for SNPs...\n")
 
     # Subset datatable to SNP loci using REF and ALT character string matching
     df.snp <- df %>%
@@ -661,7 +661,7 @@ runSCM_single <- function(x, tree, gt_state_list,
   
   # Run phytools::make.simmap() using all cores specified in <cl>
   scm <- parLapply(cl,
-                      x = replicate(cores,
+                      X = replicate(cores,
                                     as.matrix(gt_matrix),
                                     simplify = FALSE),
                       fun = make.simmap,
@@ -1722,10 +1722,16 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
 }
 
 #* Add scm-scaled scaled tree to h5f file 
-add_scaled_tree_to_h5f <- function(h5f_path, overwrite = FALSE) {
+add_scaled_tree_to_h5f <- function(h5f_path, phylo, overwrite = FALSE, merged = FALSE) {
   # ARGUMENTS:
   #   - h5f_path:
   #       Path to h5f file
+  #   - phylo:
+  #       Phylo object
+  #   - overwrite:
+  #       Boolean; overwrite h5f file if it exists (default = FALSE)
+  #   - merged:
+  #       Boolean; if TRUE, the h5f file is a merged (default = FALSE)
 
   # If overwrite = FALSE, test if scm_scaled_tree already exists in h5f
   if (!overwrite) {
@@ -1736,36 +1742,122 @@ add_scaled_tree_to_h5f <- function(h5f_path, overwrite = FALSE) {
     try(h5delete(h5f_path, "scm_scaled_tree"), silent = TRUE)
   }
 
-  # Open h5
-  h5 <- H5Fopen(h5f_path)
+  if (!merged) {
+    # Open h5f
+    h5 <- H5Fopen(h5f_path)
 
-  # Test that all edge vectors are the same length
-  x <- h5$`assigned_edges` %>%
-    lapply(length) %>%
-    unlist() %>%
-    unique()
-  if (length(x) > 1) {
-    stop("Edge vectors are not the same length", call. = FALSE)
+    # Test that all edge vectors are the same length
+    x <- h5$`assigned_edges` %>%
+      lapply(length) %>%
+      unlist() %>%
+      unique()
+    if (length(x) > 1) {
+      stop("Edge vectors are not the same length", call. = FALSE)
+    }
+
+    # Sum across all edge vectors
+    edge_burdens <- h5$`assigned_edges` %>%
+      lapply(unlist) %>%
+      do.call(what = cbind) %>%
+      t() %>%
+      colSums()
+
+    # Assign edge lengths to tree
+    tr_mutbrdn <- phylo
+    tr_mutbrdn$edge.length <- edge_burdens
+
+    # Close h5
+    h5closeAll()
+
+    # Write burden-scaled tree to h5
+    h5write(obj = write.tree(phy = tr_mutbrdn),
+                    file = h5f_path,
+                    name = "scm_scaled_tree")
+  } else {
+    # Read groups from h5f
+    groups <- h5ls(h5f_path, recursive = FALSE)$name
+
+    # Test that all edge vectors are the same length
+    x <- groups %>%
+      lapply(function(x) {
+        h5read(h5f_path, paste0(x,"/assigned_edges"))
+      }) %>% 
+      unlist(recursive = FALSE) %>%
+      lapply(length) %>%
+      unlist() %>%
+      unique()
+    if (length(x) > 1) {
+      stop("Edge vectors are not the same length", call. = FALSE)
+    }
+
+    # Sum across all edge vectors
+    edge_burdens <- groups %>%
+      lapply(function(x) {
+        h5read(h5f_path, paste0(x,"/assigned_edges"))
+      }) %>% 
+      unlist(recursive = FALSE) %>%
+      lapply(unlist) %>%
+      do.call(what = cbind) %>%
+      t() %>%
+      colSums()
+
+    # Assign edge lengths to tree
+    tr_mutbrdn <- phylo
+    tr_mutbrdn$edge.length <- edge_burdens
+
+    # Write burden-scaled tree to h5
+    h5write(obj = write.tree(phy = tr_mutbrdn),
+                    file = h5f_path,
+                    name = "scm_scaled_tree")
+  }
+}
+
+#* Merge multiple h5f files into one; this output will have a group for each
+#* name in h5f_paths.
+merge_h5_files <- function(h5f_paths, new_h5_name){
+  # h5f_paths = named list of h5f paths; names used for grouping
+  # new_h5_name = name of new h5f file
+  
+  # Check if new h5f already exists
+  if (file.exists(new_h5_name)) {
+    stop(paste("File [", new_h5_name, "] already exists."))
   }
 
-  # Sum across all edge vectors
-  edge_burdens <- h5$`assigned_edges` %>%
-    lapply(unlist) %>%
-    do.call(what = cbind) %>%
-    t() %>%
-    colSums()
+  # Check that all paths exist
+  for (h5f_path in h5f_paths) {
+    if (!file.exists(h5f_path)) {
+      stop(paste("File [", h5f_path, "] does not exist."))
+    }
+  }
+  
+  # Create new h5f
+  merged_h5 <- H5Fcreate(new_h5_name)
+  # Create groups for each name in h5f_paths
+  for (name in names(h5f_paths)) {
+    h5createGroup(merged_h5, name)
+  }
 
-  # Assign edge lengths to tree
-  tr_mutbrdn <- tr
-  tr_mutbrdn$edge.length <- edge_burdens
-
-  # Close h5
+  # For each h5f path, copy the data to the new h5f
+  # using the name of the h5f as the group name
+  for (name in names(h5f_paths)) {
+    h5f_path <- h5f_paths[[name]]
+    h5f <- H5Fopen(h5f_path)
+    
+    # Copy the data from the h5f to the new h5f
+    for (dataset_name in h5ls(h5f) %>%
+           filter(group == "/") %>%
+           pull(name)) {
+      
+      H5Ocopy(h5loc = h5f,
+              h5loc_dest = merged_h5,
+              name = dataset_name,
+              name_dest = paste0(name, "/", dataset_name))
+    }
+    
+    # Close the h5f
+    H5Fclose(h5f)
+  }
   h5closeAll()
-
-  # Write burden-scaled tree to h5
-  h5write(obj = write.tree(phy = tr_mutbrdn),
-                  file = h5f_path,
-                  name = "scm_scaled_tree")
 }
 
 ####* PLOTTING FUNCTIONS *####
