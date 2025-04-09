@@ -727,7 +727,7 @@ detect_state_changes <- function(tree_edges, states){
 
   # If root state is NA, return 0's for all branches and exit
   if ( is.na(states[tree_edges[1, ][1]]) ){
-    return(rep(0, length(states)))
+    return(rep(0, nrow(tree_edges)))
   }
 
   # Pull root genotype from first index of states
