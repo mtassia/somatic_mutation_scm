@@ -6,3 +6,4 @@ dev/smk/config/config.yaml
 dev/smk/.snakemake
 dev/smk/logs
 dev/smk/output
+sandbox/

@@ -11,3 +11,7 @@ input:
   models:
     sampleA: "/path/to/sampleA_gt10.cellphy.model"
     sampleB: "/path/to/sampleB_gt10.cellphy.model"
+run_params:
+  n_threads: 4
+  n_replicates: 100
+  mem_mb: 16000

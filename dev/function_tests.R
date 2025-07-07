@@ -4,26 +4,24 @@ par(mar = rep(5, 4))
 
 ##### Data import #####
 #Read tree
-tr<-read.tree(file=paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.supportFBP")) %>%
+tr<-read.tree(file=paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.supportFBP")) %>%
   root(outgroup = "outgroup", resolve.root = T) %>%
   drop.tip("outgroup") %>%
   ladderize()
 #tr<-collapse_poor_supported_edges(tr,90)
 
 #Read vcf
-vcf<-read.vcfR(paste0(getwd(), "/dev/data/test.vcf.gz"))
+vcf<-read.vcfR(paste0(getwd(), "/dev/data/test2.vcf.gz"))
 gt_list.snp<-compile_gt_states.snp(vcf)
 # gt_list.indel<-compile_gt_states.indel(vcf)
 
 #Prep Q matrices
-snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test.vcf.cellphy.raxml.bestModel"))
+snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vcf.cellphy.raxml.bestModel"))
 # indel.q<-generate_indel_model(indel_state_list = gt_list.indel, tree = tr)
 
 ##### SCM SNPS #####
 #Focal variant
-# var <- "chr5_1295113"
-# var <- "chr22_50057483"
-# var <- "chr9_5073770"
+var <- "chr7_158070626"
 var <- sample(names(gt_list.snp), size = 1)
 scm_example <- runSCM_single(x = var,
                              tree = tr,
@@ -158,6 +156,7 @@ multi_scm(gt_state_list = gt_list.snp,
           brute = FALSE)
 add_scaled_tree_to_h5f(h5f_path = h5_str,
                        phylo = tr,
+                       write = TRUE,
                        overwrite = FALSE,
                        merged = FALSE)
 
@@ -188,7 +187,8 @@ h5ls("dev/data/merged.h5", recursive = FALSE)
 add_scaled_tree_to_h5f(h5f_path = "dev/data/merged.h5",
                        phylo = tr,
                        overwrite = FALSE,
-                       merged = TRUE)
+                       merged = TRUE,
+                       write = FALSE) %>% plot()
 
 ##### PLOTTING #####
 tr_l <- list(tr, tr_mutbrdn)
