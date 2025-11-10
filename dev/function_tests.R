@@ -21,7 +21,7 @@ snp.q <- read_cellphy_model(bestModel_path = paste0(getwd(), "/dev/data/test2.vc
 
 ##### SCM SNPS #####
 #Focal variant
-var <- "chr7_158070626"
+var <- "chr9_134574763"
 var <- sample(names(gt_list.snp), size = 1)
 scm_example <- runSCM_single(x = var,
                              tree = tr,
@@ -33,7 +33,8 @@ scm_example <- runSCM_single(x = var,
 par(mfrow = c(1, 1), ask = FALSE)
 summarise_scm.snp(multiSimmap = scm_example,
                   locus = var,
-                  plot = TRUE)
+                  plot = TRUE,
+                  title = var)
 
 par(mar = c(5, 5, 5, 5))
 plot(density(scm_example))
@@ -75,72 +76,8 @@ for (i in sample(names(gt_list.snp), size = 20, replace = FALSE)) {
   tmp <- summary(scm)
 }
 
-##### SCM INDELS #####
-# site = sample(names(gt_list.indel),size=1)
-# scm_example <- runSCM_single(
-#   x = site,
-#   tree = tr,
-#   gt_state_list = gt_list.indel,
-#   Qmat = indel.q,
-#   reduced = FALSE,
-#   reps = 1000,
-#   cores = 6)
-# par(mfrow = c(1, 1), ask = FALSE)
-# plot_density_hist.indel(scm_example)
-# summarise_scm.indel(scm_example, plot = TRUE, title = site)
-
-# par(mfrow = c(5, 5))
-# null <- sapply(scm_example[sample(seq(1, 1000), size = 25, replace = FALSE)],
-#             plot,
-#             ftype = "off",
-#             lwd = 1.5,
-#             colors = c("REF" = "gray", "HET" = "royalblue", "ALT" = "tomato"))
-
-# par(mfrow = c(4, 5))
-# for (i in sample(names(gt_list.indel), size = 20, replace = FALSE)){
-#   scm < -runSCM_single(x = i,
-#     tree = tr,
-#     gt_state_list = gt_list.indel,
-#     Qmat = indel.q,
-#     reps = 1000,
-#     cores = 6,
-#     reduced = TRUE)
-#   print(paste0("Q logL: ",scm[[1]]$logL[1]))
-#   summarise_scm.indel(scm, plot = TRUE, title = i, legend = FALSE)
-#   lapply(scm, function(x) {x$logL[1]}) %>% unlist() %>% summary()
-#   tmp <- summary(scm)
-# }
-
-# scm_summary <- summary(scm_example)
-# Prior_post <- data.frame(gt_list.indel[[site]]) %>%
-#   select(Indiv, REF, HET, ALT) %>%
-#   pivot_longer(cols=2:4, names_to = "genotype", values_to = "prior") %>%
-#   left_join(as.data.frame(scm_summary$tips) %>%
-#               rownames_to_column(var = "Indiv") %>%
-#               pivot_longer(cols = 2:ncol(.),
-#                            names_to = "genotype",
-#                            values_to = "posterior")) %>%
-#   mutate(posterior = case_when(is.na(posterior) ~ 0,
-#                                TRUE ~ posterior))
-# Prior_post$genotype <- factor(Prior_post$genotype,
-#                               levels = c("REF", "HET", "ALT"))
-
-# ggplot(Prior_post, aes(x = prior, y = posterior, fill = genotype)) +
-#   geom_point(size = 4, shape = 21) +
-#   geom_abline(slope = 1, linetype = 2, color = "gray") +
-#   facet_wrap(~genotype) +
-#   scale_fill_manual(values = c("REF" = "gray",
-#                                "HET" = "royalblue",
-#                                "ALT" = "tomato"),
-#                     guide = "none")+
-#   coord_equal(xlim = c(0, 1), ylim = c(0, 1)) +
-#   theme_cowplot() +
-#   theme(strip.background = element_blank(),
-#         strip.text = element_text(face = "bold"),
-#         plot.title = element_text(hjust = 0.5, face = "bold"))
-
 ##### HDF5 TESTS #####
-h5_str <- "dev/data/chr21_deleteme.h5"
+h5_str <- "dev/data/merged.h5"
 source("dev/bin/SCM_functions.R")
 
 # Run multi_scm
@@ -182,7 +119,7 @@ merge_h5_files(h5f_paths = c("chr20" = "dev/data/chr20.h5",
                               "chr22" = "dev/data/chr22.h5"),
                 new_h5_name = "dev/data/merged.h5")
 
-h5ls("dev/data/merged.h5", recursive = FALSE)
+h5ls("dev/data/merged.h5", recursive = 2)
 
 add_scaled_tree_to_h5f(h5f_path = "dev/data/merged.h5",
                        phylo = tr,
