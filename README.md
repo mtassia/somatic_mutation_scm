@@ -66,6 +66,7 @@ This repository contains the tools for inferring the evolution of somatic mutati
 |           |-- src/ # Custom R functions used in SCM workflow
 |       |-- scm.smk # Snakefile
 |       |-- snakemake_env.yaml # Conda environment recipe for running Snakemake
+|-- docs/
 |-- .gitignore
 |-- LICENSE
 |-- r_env.yaml # (TEMPORARY) environment for developing SCM tools
