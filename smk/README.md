@@ -1,4 +1,4 @@
-# snakemake workflow (smk)
+# Snakemake workflow
 
 This directory contains the Snakemake pipeline used to run stochastic character mapping (SCM) on somatic SNVs.
 
