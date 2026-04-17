@@ -16,21 +16,9 @@ DESCRIPTION:
     This method leverages both the phylgoenetic tree and best-fit 10-state substitution model parameters output
     from CellPhy. 
 
-DIRECTORY STRUCTURE:
-    .
-    ├── logs
-    ├── profile
-    │   └── config.yaml
-    ├── scm.smk
-    └── workflow
-        |── bin
-        |   └── ...
-        └── envs
-            └── ...
-
 USAGE: 
-    snakemake --configfile config.yaml --profile /path/to/profile_dir/ --snakefile scm.smk -p # slurm
-    snakemake --configfile config.yaml --snakefile scm.smk --use-conda --cores 16 -p # local
+    snakemake --configfile config.yaml --profile /path/to/profile_dir/ -p # slurm
+    snakemake --configfile config.yaml --use-conda --cores 16 -p # local
 """
 
 #--- IMPORTS ---#
@@ -61,9 +49,9 @@ localrules:
 
 rule all:
     input:
-        expand("output/merged/{sample}.h5",
+        expand("results/merged/{sample}.h5",
                 sample=config["input"]["vcfs"].keys()),
-        expand("output/trees/{sample}.scm.nwk",
+        expand("results/trees/{sample}.scm.nwk",
                 sample=config["input"]["vcfs"].keys())
 
 rule scm_chromosome:
@@ -72,12 +60,12 @@ rule scm_chromosome:
         vcf = lambda wildcards: config["input"]["vcfs"][wildcards.sample],
         model = lambda wildcards: config["input"]["models"][wildcards.sample],
         script = "workflow/bin/chromosome_scm.R",
-        functions = "workflow/src/SCM.smk.R"
+        functions = "workflow/bin/SCM.smk.R"
     output:
-        h5 = temp("output/{sample}.{chrom}.h5")
+        h5 = temp("results/{sample}.{chrom}.h5")
     params:
         outgroup = lambda wildcards: config["input"]["outgroup"][wildcards.sample],
-        prefix = "output/{sample}.{chrom}",
+        prefix = "results/{sample}.{chrom}",
         reps = config["run_params"]["n_replicates"]
     resources:
         time = "24:00:00",
@@ -85,7 +73,7 @@ rule scm_chromosome:
     threads:
         config["run_params"]["n_threads"]
     conda:
-        "workflow/envs/scm.yaml"
+        "envs/scm.yaml"
     shell:
         """
         Rscript {input.script} \
@@ -101,19 +89,19 @@ rule scm_chromosome:
 
 rule merge_h5:
     input:
-        h5_files = lambda wildcards: expand("output/{sample}.{chrom}.h5",
+        h5_files = lambda wildcards: expand("results/{sample}.{chrom}.h5",
                           sample=wildcards.sample,      
                           chrom=chrom),
         script = "workflow/bin/merge_scm_h5.R",
-        functions = "workflow/src/SCM.smk.R"
+        functions = "workflow/bin/SCM.smk.R"
     output:
-        h5 = "output/merged/{sample}.h5"
+        h5 = "results/merged/{sample}.h5"
     params:
         h5_files_str = lambda w, input:",".join(input.h5_files)
     resources:
         time = "1:00:00"
     conda:
-        "workflow/envs/scm.yaml"
+        "envs/scm.yaml"
     shell:
         """
         Rscript {input.script} \
@@ -126,14 +114,14 @@ rule write_tree:
     input:
         h5 = rules.merge_h5.output.h5,
         script = "workflow/bin/write_burden_to_tree.R",
-        functions = "workflow/src/SCM.smk.R",
+        functions = "workflow/bin/SCM.smk.R",
         tree = lambda wildcards: config["input"]["trees"][wildcards.sample]
     output:
-        tree = "output/trees/{sample}.scm.nwk"
+        tree = "results/trees/{sample}.scm.nwk"
     params: 
         outgroup = lambda wildcards: config["input"]["outgroup"][wildcards.sample],
     conda:
-        "workflow/envs/scm.yaml"
+        "envs/scm.yaml"
     shell:
         """
         Rscript {input.script} \

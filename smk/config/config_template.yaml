@@ -1,0 +1,19 @@
+# Example config file for running SCM on two samples (sampleA and sampleB). 
+# Note that the keys under each input section (vcfs, trees, outgroup, models) must match
+input:
+  vcfs:
+    sampleA: "/path/to/sampleA.vcf" # VCF of somatic SNVs for sampleA
+    sampleB: "/path/to/sampleB.vcf" # VCF of somatic SNVs for sampleB
+  trees:
+    sampleA: "/path/to/sampleA.cellphy.supportFBP" # CellPhy tree with support values for sampleA (generated using sampleA.vcf)
+    sampleB: "/path/to/sampleB.cellphy.supportFBP" # CellPhy tree with support values for sampleB (generated using sampleB.vcf)
+  outgroup:
+    sampleA: "sampleA_outgroup" # Name of outgroup sample for sampleA (must match name in trees[sampleA])
+    sampleB: "sampleB_outgroup" # Name of outgroup sample for sampleB (must match name in trees[sampleB])
+  models:
+    sampleA: "/path/to/sampleA_gt10.cellphy.model" # CellPhy model file for sampleA (generated using sampleA.vcf)
+    sampleB: "/path/to/sampleB_gt10.cellphy.model" # CellPhy model file for sampleB (generated using sampleB.vcf)
+run_params:
+  n_threads: 4
+  n_replicates: 100
+  mem_mb: 16000

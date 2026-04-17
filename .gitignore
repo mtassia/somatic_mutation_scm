@@ -1,10 +1,11 @@
 .vscode
 .DS_Store
-dev/data
-dev/smk/profile/config.yaml
-dev/smk/config/config.yaml
-dev/smk/.snakemake
-dev/smk/logs
-dev/smk/output
+smk/data/
+smk/profile/
+smk/config/config.yaml
+smk/.snakemake/
+smk/logs/
+smk/results/
+smk/sandbox/
 sandbox/
 .lintr
