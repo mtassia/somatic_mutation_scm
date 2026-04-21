@@ -16,6 +16,13 @@ The workflow runs per-sample SCM in three stages:
 smk/
 |-- config/
 |   `-- config_template.yaml        # Example multi-sample configuration
+|-- example_data/                   # Example input files for two samples (test1 and test2)
+|   |-- test1.vcf.gz
+|   |-- test1.nwk
+|   |-- test1.cellphy.bestModel
+|   |-- test2.vcf.gz
+|   |-- test2.nwk
+|   `-- test2.cellphy.bestModel
 |-- workflow/
 |   |-- Snakefile                   # Main Snakemake workflow
 |   |-- bin/                        # Scripts and helper functions called by rules
@@ -23,6 +30,8 @@ smk/
 |       `-- scm.yaml                # Rule-level conda environment for SCM scripts
 `-- smk7_scm.yaml                   # Environment for Snakemake itself
 ```
+
+Example data files have been included in the `example_data/` directory for testing purposes. Each VCF contains 10 loci per chromosome (chr1-22), randomly selected from a larger dataset.
 
 ## Input requirements
 
