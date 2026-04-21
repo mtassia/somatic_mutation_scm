@@ -8,7 +8,7 @@
   - [1. About](#1-about)
   - [2. Data prerequisites](#2-data-prerequisites)
   - [3. Repository organization](#3-repository-organization)
-  - [4. To-do](#4-to-do)
+  - [4. Rulegraph](#4-rulegraph)
  
 ## 1. About
 ![Example SCM summaries](./docs/figs/scm_summary.png)
@@ -49,8 +49,11 @@ somatic_mutation_scm/
 ├── LICENSE                        # License for the repository
 ├── README.md                      # This file
 ├── docs/                          # Documentation and notebooks related to code/theory development and testing
+│   ├── figs/                      # Figures for the documentation
+│   └── notebooks/                 # Jupyter notebooks for code/theory development and testing
 └── smk/                           # Snakemake workflow for applying stochastic character mapping to somatic SNVs
     ├── config/                    # Configuration files for the Snakemake workflow
+    ├── example_data/              # Example input files for testing purposes
     ├── workflow/                  # Snakemake rules, scripts, and environments for the workflow
     │   ├── bin/                   # Code for running Snakefile rules and applying stochastic character mapping to somatic SNVs
     │   ├── envs/                  # Conda environments for the Snakemake workflow
@@ -58,7 +61,6 @@ somatic_mutation_scm/
     └── smk7_scm.yaml              # Conda environment for running the Snakemake workflow
 ```
 
-## 4. To-do
-- [ ] Modify code to accommodate multiallelic sites
-- [ ] Modify pipeline to include a step for revising the phylogeny after removing sites that have strong support to be germline polymorphisms
-- [ ] Modify pipeline to include a post-hoc test to re-map recurrent convergence events (see [here](./docs/recurrent_convergence.ipynb))
+## 4. Rulegraph
+
+![Rulegraph](./smk/rg.png)

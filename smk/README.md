@@ -71,8 +71,10 @@ Adjust `run_params` as needed for your computational environment.
 
 Per sample, the workflow generates:
 
-- `results/merged/{sample}.h5`
-- `results/trees/{sample}.scm.nwk`
+- `results/merged/{sample}.h5` # Merged HDF5 file containing SCM summaries for all chromosomes
+- `results/trees/{sample}.scm.nwk` # Newick tree with branch lengths scaled by mutation burden
+
+*Note: Documentation on the h5 file structure will be provided in the future.*
 
 ## Usage
 
