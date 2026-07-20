@@ -1,0 +1,103 @@
+---
+title: "Simulating hematopoietic phylogeny for SCM validation"
+author: "Michael Tassia"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(comment = "",
+                      fig.align = 'center',
+                      out.width = "75%")
+```
+
+# Overview
+
+The objective of this notebook is to document our validation strategy for applying stochastic character mapping as a technique for reconstructing somatic genotypes given a phylogenetic tree, substitution model, and a data set of observed genotype states at the tips (see [*Bollback 2006*](https://link.springer.com/article/10.1186/1471-2105-7-88) and [*Revell 2024*](https://peerj.com/articles/16505/)). As a ground-truth somatic phylogeny data set does not yet exist, we will leverage simulation as a framework for validation.
+
+This notebook will first describe the approach, key functions, and expected outcomes. Afterwards, additional layers of technical and biological variation will be introduced, including:
+
+- Sample size
+
+- Sequencing depth
+
+- Missing data
+
+- ISM-violation rate
+
+# Simulating hematopoiesis
+
+We use the publicly available [`rsimpop` package](https://github.com/nangalialab/rsimpop) developed by Nick Williams at the Sanger Institute to simulate hematopoiesis under a birth-death model. This package implements the Gillepsie algorithm (see [here](https://lewiscoleblog.com/gillespie-algorithm) for basic overview) to simulate cellular compartments under a distribution of user-defined parameters and is described in the supplementary information of [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y#Sec32).
+
+Here, we use `rsimpop` with parameters set following empirical estimates from the literature. Fitness coefficients manifest as increased symmetric division rates, and polygenic effects are assumed to be additive.
+
+## Distribution of fitness effects (DFE)
+
+`rsimpop` encodes fitness as increased rates of symmetric division (i.e., birth) for clones bearing a driver mutation. Here, we draw fitness effects from a gamma distribution using the parameters described in [Extended Data Fig 12 of *Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y/figures/17).
+
+```{r}
+
+# DFE function
+genGammaFitness <- function(shape, rate) {
+  function() rgamma(n = 1, shape = shape, rate = rate)
+}
+fitnessFn <- genGammaFitness(shape = 0.47, rate = 34) # parameters from Mitchell et al. 2022
+
+# Plot DFE
+hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
+     breaks = 100, xlim = c(0, 1),
+     xlab = "Selection coefficient", main = "")
+
+```
+
+## Simulate HSC population
+
+Using the DFE above, we can simulate hematopoiesis with stochastic introduction of driver mutations using the `run_driver_process_sim()` wrapper in `rsimpop`. This function has several important parameters which will be defined below:
+
+- `simpop = NULL`: Default setting; do not use a pre-existing simpop object
+
+- `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
+
+- `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+
+- `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+
+- `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
+
+- `fitness = fitnessFn`: User-defined fitness function defined above
+
+- `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+
+```{r}
+SEED <- 1212121
+initSimPop(SEED, bForce = TRUE)
+
+sim <- run_driver_process_sim(
+  simpop                   = NULL,  
+  initial_division_rate    = 0.1,  
+  final_division_rate      = 1/365,   
+  target_pop_size          = 1e5, 
+  nyears                   = 80,  
+  fitness                  = fitnessFn, 
+  drivers_per_cell_per_day = 2.0e-3 / 365  
+)
+```
+We can then draw a sample from the HSC compartment and rescale the phylogeny from divisions to mutations.
+```{r}
+
+# Sample 100 cells from the population
+st <- get_subsampled_tree(sim, 100)
+
+# Re-scale the phylogeny by mutations
+st_mut <- get_elapsed_time_tree(st, 
+                                mutrateperdivision = 0, 
+                                backgroundrate = 16.8/365)
+
+# Plot driver events on the phylogeny
+plot_tree_events(st_mut,
+                 cex.label = 0,
+                 legpos = NULL)
+
+```

@@ -9,3 +9,4 @@ smk/results/
 smk/sandbox/
 sandbox/
 .lintr
+.Rproj.user
