@@ -19,19 +19,29 @@ The objective of this notebook is to document our validation strategy for applyi
 
 This notebook will first describe the approach, key functions, and expected outcomes. Afterwards, additional layers of technical and biological variation will be introduced, including:
 
-- Sample size
+-   Sample size
 
-- Sequencing depth
+-   Sequencing depth
 
-- Missing data
+-   Missing data
 
-- ISM-violation rate
+-   ISM-violation rate
 
 # Simulating hematopoiesis
 
 We use the publicly available [`rsimpop` package](https://github.com/nangalialab/rsimpop) developed by Nick Williams at the Sanger Institute to simulate hematopoiesis under a birth-death model. This package implements the Gillepsie algorithm (see [here](https://lewiscoleblog.com/gillespie-algorithm) for basic overview) to simulate cellular compartments under a distribution of user-defined parameters and is described in the supplementary information of [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y#Sec32).
 
 Here, we use `rsimpop` with parameters set following empirical estimates from the literature. Fitness coefficients manifest as increased symmetric division rates, and polygenic effects are assumed to be additive.
+
+The libraries and functions used in this notebook are tracked in [`simphy_functions.R`](simphy_functions.R).
+
+```{r, warning = FALSE}
+
+suppressMessages(
+  source("simphy_functions.R")
+)
+
+```
 
 ## Distribution of fitness effects (DFE)
 
@@ -40,10 +50,7 @@ Here, we use `rsimpop` with parameters set following empirical estimates from th
 ```{r}
 
 # DFE function
-genGammaFitness <- function(shape, rate) {
-  function() rgamma(n = 1, shape = shape, rate = rate)
-}
-fitnessFn <- genGammaFitness(shape = 0.47, rate = 34) # parameters from Mitchell et al. 2022
+fitnessFn <- genGammaFitness(shape = 0.47, rate = 34) 
 
 # Plot DFE
 hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
@@ -56,24 +63,27 @@ hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
 
 Using the DFE above, we can simulate hematopoiesis with stochastic introduction of driver mutations using the `run_driver_process_sim()` wrapper in `rsimpop`. This function has several important parameters which will be defined below:
 
-- `simpop = NULL`: Default setting; do not use a pre-existing simpop object
+-   `simpop = NULL`: Default setting; do not use a pre-existing simpop object
 
-- `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
+-   `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
 
-- `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+-   `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
-- `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+-   `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
-- `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
+-   `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
 
-- `fitness = fitnessFn`: User-defined fitness function defined above
+-   `fitness = fitnessFn`: User-defined fitness function defined above
 
-- `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+-   `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
-```{r}
+```{r, results = 'hide', warning = FALSE}
+
+# Simulation seed
 SEED <- 1212121
 initSimPop(SEED, bForce = TRUE)
 
+# Run rsimpop
 sim <- run_driver_process_sim(
   simpop                   = NULL,  
   initial_division_rate    = 0.1,  
@@ -83,11 +93,8 @@ sim <- run_driver_process_sim(
   fitness                  = fitnessFn, 
   drivers_per_cell_per_day = 2.0e-3 / 365  
 )
-```
-We can then draw a sample from the HSC compartment and rescale the phylogeny from divisions to mutations.
-```{r}
 
-# Sample 100 cells from the population
+# Sample 100 cells from the HSC population
 st <- get_subsampled_tree(sim, 100)
 
 # Re-scale the phylogeny by mutations
@@ -101,3 +108,92 @@ plot_tree_events(st_mut,
                  legpos = NULL)
 
 ```
+
+Last before creating a mutation matrix that'll ultimately be used to approximate a VCF-like data structure, we need to extract the `phylo` object from the `simpop` output and remove the artificial out group (*s1*).
+
+```{r, warning = FALSE}
+
+# Remove s1 from phylogeny
+tr <- get_phylo_object(st_mut) %>% drop.tip("s1")
+
+# Plot phylo
+ggtree(tr,
+       ladderize = FALSE) +
+  layout_dendrogram()
+
+```
+
+## Simulate mutation data
+
+Because `rsimpop` tracks mutation origin alongside the "ground truth" simulated history, we can use these mutations to reconstruct a VCF-like structure that can later be used for SCM.
+
+```{r}
+
+# Extract phyletic patterns per mutation
+mut_mat <- create_mut_df(tr)
+
+# Preview mutation matrix
+mut_mat[1:5, 1:5]
+
+```
+
+The `G` object above is a matrix of 0s and 1s, where rows correspond to mutations and columns correspond to sampled cells. A value of 1 indicates that the mutation is present in the cell, while a value of 0 indicates that it is absent. An additional column is included `G[,1]` to track the edge on which the mutation arose -- this is important for tracking accuracy of SCM later.
+
+For example:
+
+```{r}
+
+# Plot tree with edge labels
+plot.phylo(tr,
+           show.tip.label = TRUE,
+           direction = "downwards",
+           cex = 0.5)
+edgelabels(edge = 10)
+
+# For the first row of G where G[,1] == 10, print columns where mutation is present
+ingroup <- mut_mat[mut_mat[,1] == 10,] %>%
+  head(n = 1) %>%
+  colnames(.)[as.vector(.) == 1] %>%
+  colnames()
+
+cat(paste("Mutation events on edge 10 are inherited by the following tips:\n",
+          ingroup[1],
+          "to",
+          ingroup[length(ingroup)]))
+
+```
+
+From this, we can use the `simulate_depth_and_ad` function to simulate sequencing data. Default parameters are set such that they mimic the structure of clean data described in both [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y) and [Coorens et al. 2025](https://www.nature.com/articles/s41596-024-00962-8).
+
+-   `G`: Matrix output by `create_mut_df()`
+
+-   `D_bar = 20`: Target mean sequencing depth across the whole matrix
+
+-   `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style min_cov)
+
+-   `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
+
+-   `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
+
+-   `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
+
+-   `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
+
+-   `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
+
+-   `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
+
+-   `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
+
+-   `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
+
+-   `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
+
+```{r}
+
+sim_reads <- simulate_depth_and_ad(G = mut_mat)
+glimpse(sim_reads)
+
+```
+From the `sim_reads` list output, the `AD` and `DP` data frames contain the simulated read data at each site for each sample. Using these values, we can approximate Phred-scaled genotype likelihoods following a structure similar to the fixed-error-rate GATK model ([DePristo et al. 2011](https://www.nature.com/articles/ng.806)). 
+

@@ -25,10 +25,10 @@ initSimPop(SEED, bForce = TRUE)
 ## ~0.3-0.5/yr for the strongest DNMT3A/TET2/SF3B1-class drivers).
 ## Treat these threshold/rate values as a starting point to recalibrate
 ## against whichever published fitness table you're targeting.
-genExpFitness <- function(fitness_threshold, rate) {
-  function() rtrunc(n = 1, a = fitness_threshold, b = Inf, "exp", rate = rate)
+genGammaFitness <- function(shape, rate) {
+  function() rgamma(n = 1, shape = shape, rate = rate)
 }
-fitnessFn <- genExpFitness(fitness_threshold = 0.01, rate = 40)
+fitnessFn <- genGammaFitness(shape = 0.47, rate = 34) # parameters from Mitchell et al. 2022
 
 ## sanity-check the implied annual growth-rate distribution before committing
 ## compute to a full run
