@@ -19,13 +19,13 @@ The objective of this notebook is to document our validation strategy for applyi
 
 This notebook will first describe the approach, key functions, and expected outcomes. Afterwards, additional layers of technical and biological variation will be introduced, including:
 
--   Sample size
+- Sample size
 
--   Sequencing depth
+- Sequencing depth
 
--   Missing data
+- Missing data
 
--   ISM-violation rate
+- ISM-violation rate
 
 # Simulating hematopoiesis
 
@@ -63,19 +63,19 @@ hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
 
 Using the DFE above, we can simulate hematopoiesis with stochastic introduction of driver mutations using the `run_driver_process_sim()` wrapper in `rsimpop`. This function has several important parameters which will be defined below:
 
--   `simpop = NULL`: Default setting; do not use a pre-existing simpop object
+- `simpop = NULL`: Default setting; do not use a pre-existing simpop object
 
--   `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
+- `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
 
--   `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+- `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
--   `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+- `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
--   `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
+- `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
 
--   `fitness = fitnessFn`: User-defined fitness function defined above
+- `fitness = fitnessFn`: User-defined fitness function defined above
 
--   `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+- `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
 ```{r, results = 'hide', warning = FALSE}
 
@@ -165,35 +165,56 @@ cat(paste("Mutation events on edge 10 are inherited by the following tips:\n",
 
 From this, we can use the `simulate_depth_and_ad` function to simulate sequencing data. Default parameters are set such that they mimic the structure of clean data described in both [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y) and [Coorens et al. 2025](https://www.nature.com/articles/s41596-024-00962-8).
 
--   `G`: Matrix output by `create_mut_df()`
+- `G`: Matrix output by `create_mut_df()`
 
--   `D_bar = 20`: Target mean sequencing depth across the whole matrix
+- `D_bar = 20`: Target mean sequencing depth across the whole matrix
 
--   `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style min_cov)
+- `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style min_cov)
 
--   `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
+- `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
 
--   `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
+- `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
 
--   `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
+- `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
 
--   `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
+- `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
 
--   `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
+- `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
 
--   `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
+- `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
 
--   `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
+- `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
 
--   `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
+- `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
 
--   `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
+- `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
 
 ```{r}
 
-sim_reads <- simulate_depth_and_ad(G = mut_mat)
+sim_reads <- simulate_DP_and_AD(G = mut_mat)
 glimpse(sim_reads)
 
 ```
-From the `sim_reads` list output, the `AD` and `DP` data frames contain the simulated read data at each site for each sample. Using these values, we can approximate Phred-scaled genotype likelihoods following a structure similar to the fixed-error-rate GATK model ([DePristo et al. 2011](https://www.nature.com/articles/ng.806)). 
 
+From the `sim_reads` list output, the `AD` and `DP` data frames contain the simulated read data at each site for each sample. Using these values, we can approximate Phred-scaled genotype likelihoods following a structure similar to the fixed-error-rate GATK model ([DePristo et al. 2011](https://www.nature.com/articles/ng.806)).
+
+```{r}
+
+sim_genotypes <- simulate_GQ_PL_GT(AD = sim_reads$AD,
+                                   DP = sim_reads$DP)
+glimpse(sim_genotypes)
+
+```
+Finally, we will sample sites from the human genome and assign these to the records held in `sim_genotypes`. These sites will then be threaded into a function to create a VCF-like structure.
+
+```{r}
+
+mut_table <- sample_mutation_loci(nrow(sim_genotypes$GT))
+vcf_df <- build_vcf_df(G = mut_mat, 
+                       DP = sim_reads$DP, 
+                       AD = sim_reads$AD, 
+                       gl = sim_genotypes,
+                       edges = G$edge)
+
+head(vcf_df[, 1:10])
+```

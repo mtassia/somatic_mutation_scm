@@ -66,7 +66,7 @@ create_mut_df <- function(tree) {
   return(mat)
 }
 
-simulate_depth_and_ad <- function(G,
+simulate_DP_and_AD <- function(   G,                     # output from `create_mut_df` (mutation presence matrix)
                                   D_bar          = 20,   # target mean sequencing depth across the whole matrix
                                   min_cov        = 6,    # lower depth bound a site must clear to pass QC (Sequoia-style min_cov)
                                   max_cov        = 250,  # upper depth bound (excludes repeat/mapping-artifact loci)
@@ -76,7 +76,7 @@ simulate_depth_and_ad <- function(G,
                                   rho_max        = 0.1,  # beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
                                   site_conc_shape = 4,   # gamma shape for the distribution of per-site VAF concentration
                                   site_conc_rate  = 0.3, # gamma rate for the distribution of per-site VAF concentration
-                                  error_rate     = 0.002,# sequencing/mapping error rate (alt reads at true hom-ref sites)
+                                  error_rate     = 0.00, # sequencing/mapping error rate (alt reads at true hom-ref sites)
                                   dropout_rate   = 0.00) {# P(complete allelic dropout | truly heterozygous site)
   
   if (colnames(G)[1] == "edge") {
@@ -174,13 +174,17 @@ simulate_depth_and_ad <- function(G,
        site_conc = site_conc, site_rho = site_rho, dropout = dropout)
 }
 
-## --- GQ/PL from DP, AD (vectorized over full mutation x sample matrices) ---
-compute_GQ_PL <- function(DP, AD, error_rate = 0.002) {
+## --- GQ/PL/GT from DP, AD (vectorized over full mutation x sample matrices) ---
+simulate_GQ_PL_GT <- function(DP, AD, error_rate = 0) {
   p_hom_ref <- error_rate
   p_het     <- 0.5
   p_hom_alt <- 1 - error_rate
   
-  ## log10 genotype likelihoods 
+  n_mut  <- nrow(DP)
+  n_samp <- ncol(DP)
+  
+  ## log10 genotype likelihoods (still needed internally to derive PL/GQ,
+  ## not returned directly)
   ll <- function(p) dbinom(AD, DP, p, log = TRUE) / log(10)
   GL0 <- ll(p_hom_ref)   # 0/0
   GL1 <- ll(p_het)       # 0/1
@@ -194,9 +198,108 @@ compute_GQ_PL <- function(DP, AD, error_rate = 0.002) {
   
   ## GQ: GATK-style genotype quality = difference between the best PL (0)
   ## and the second-best PL, capped at 99
-  PL_stack <- array(c(PL0, PL1, PL2), dim = c(dim(DP), 3))
+  PL_stack  <- array(c(PL0, PL1, PL2), dim = c(n_mut, n_samp, 3))
   PL_sorted <- apply(PL_stack, c(1, 2), sort)   # 3 x n_mut x n_samp, ascending
   GQ <- pmin(PL_sorted[2, , ], 99)
   
-  list(GQ = GQ, PL0 = PL0, PL1 = PL1, PL2 = PL2)
+  ## called GT = argmin PL per site/sample
+  GT_idx <- apply(PL_stack, c(1, 2), which.min)   # 1=0/0, 2=0/1, 3=1/1
+  GT_str <- matrix(c("0/0", "0/1", "1/1")[GT_idx], n_mut, n_samp)
+  colnames(GT_str) <- colnames(PL0)
+  
+  list(GQ = GQ, PL0 = PL0, PL1 = PL1, PL2 = PL2, GT = GT_str)
+}
+
+## --- Sample mutation genomic loci (locus, ref, alt) ------------------------
+sample_mutation_loci <- function(n,
+                                 genome_pkg = "BSgenome.Hsapiens.UCSC.hg38",
+                                 chroms     = paste0("chr", c(1:22, "X")),
+                                 buffer     = 1000,
+                                 oversample = 1.02) {
+  
+  library(genome_pkg, character.only = TRUE)
+  genome     <- get(genome_pkg)
+  chrom_lens <- seqlengths(genome)[chroms]
+  
+  ## internal recursive core -- genome/chroms/chrom_lens computed once above,
+  ## then just threaded through recursive top-up calls (rare, only fires if
+  ## an N/gap region is hit)
+  .sample_core <- function(n) {
+    n_draw <- ceiling(n * oversample)
+    
+    ## vectorized chrom + position draws (no per-row loop)
+    chrom_draw <- sample(chroms, n_draw, replace = TRUE,
+                         prob = chrom_lens / sum(chrom_lens))
+    pos_draw   <- as.integer(runif(n_draw, buffer + 1,
+                                   chrom_lens[chrom_draw] - buffer))
+    
+    ## single batched genome lookup instead of n_draw separate calls
+    gr  <- GRanges(chrom_draw, IRanges(pos_draw, width = 1))
+    ref <- as.character(getSeq(genome, gr))
+    
+    valid <- ref %in% c("A", "C", "G", "T")
+    if (sum(valid) < n) {
+      ## extremely rare at buffer >= 1000; simple one-shot top-up rather than looping
+      extra <- .sample_core(n - sum(valid))
+      chrom_out <- c(chrom_draw[valid], extra$chrom)[1:n]
+      pos_out   <- c(pos_draw[valid],   extra$pos)[1:n]
+      ref_out   <- c(ref[valid],        extra$ref)[1:n]
+    } else {
+      idx <- which(valid)[1:n]
+      chrom_out <- chrom_draw[idx]
+      pos_out   <- pos_draw[idx]
+      ref_out   <- ref[idx]
+    }
+    
+    ## vectorized ALT assignment via lookup table (no per-row sample())
+    bases    <- c("A", "C", "G", "T")
+    alt_opts <- sapply(bases, function(b) setdiff(bases, b))  # 3 x 4 matrix, columns named by ref base
+    alt_out  <- alt_opts[cbind(sample.int(3, n, replace = TRUE),
+                               match(ref_out, bases))]
+    
+    data.frame(chrom = chrom_out, pos = pos_out, ref = ref_out, alt = alt_out,
+               stringsAsFactors = FALSE)
+  }
+  
+  .sample_core(n)
+}
+
+## Make VCF like structure
+build_vcf_df <- function(G, DP, AD, gl, edges,
+                         id = ".", filter = "PASS") {
+
+  if (colnames(G)[1] == "edge") {
+    G <- G[,-1]  # remove the edge column if present
+  }
+  
+  sample_names <- colnames(G)
+  
+  n_mut  <- nrow(mut_table)
+  n_samp <- ncol(gl$GT)
+  stopifnot(nrow(DP) == n_mut, nrow(AD) == n_mut,
+            length(sample_names) == n_samp, length(edges) == n_mut)
+
+  fmt_flat <- sprintf(
+    "%s:%d:%d,%d:%d:%d,%d,%d",
+    gl$GT, DP, DP - AD, AD,
+    gl$GQ,
+    gl$PL0, gl$PL1, gl$PL2
+  )
+  fmt_mat <- matrix(fmt_flat, nrow = n_mut, ncol = n_samp)
+  colnames(fmt_mat) <- sample_names
+
+  vcf_df <- data.frame(
+    CHROM  = mut_table$chrom,
+    POS    = mut_table$pos,
+    ID     = id,
+    REF    = mut_table$ref,
+    ALT    = mut_table$alt,
+    QUAL   = ".",
+    FILTER = filter,
+    INFO   = sprintf("EDGE=%d", edges),
+    FORMAT = "GT:DP:AD:GQ:PL",
+    stringsAsFactors = FALSE
+  )
+
+  cbind(vcf_df, as.data.frame(fmt_mat, stringsAsFactors = FALSE))
 }

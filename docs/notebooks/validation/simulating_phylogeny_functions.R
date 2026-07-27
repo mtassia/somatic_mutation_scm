@@ -257,7 +257,7 @@ sample_mutations <- function(n, genome, chroms, chrom_lens,
 
 mut_table <- sample_mutations(nrow(G), genome, chroms, chrom_lens)
 
-## Make VCF like structure
+
 
 build_vcf_df <- function(mut_table, GT_str, DP, AD, gl, sample_names, edges,
                          id = ".", filter = "PASS") {
