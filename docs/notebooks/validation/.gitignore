@@ -2,6 +2,7 @@
 .RDataTmp
 .Rhistory
 .Rproj.user
+test_sim/
 *.Rproj
 *.aux
 *.tex

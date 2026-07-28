@@ -575,7 +575,7 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
   ## Create empty dataframe to store the count of
   ## 95% HPD character state transitions
   hpd.df <- expand.grid(states,states) %>%
-              filter(Var1 != Var2) %>%
+              dplyr::filter(Var1 != Var2) %>%
               apply(., 1, function(x){
                 from <- strsplit(x[1], "")[[1]]
                 to <- strsplit(x[2], "")[[1]]
@@ -586,11 +586,11 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
                   return(x)
                 }
               }) %>%
-              compact() %>%
-              bind_rows() %>%
-              arrange(Var1) %>% 
-              rename(from = Var1, to = Var2) %>%
-              mutate(lower_95hpd = 0,
+              purrr::compact() %>%
+              dplyr::bind_rows() %>%
+              dplyr::arrange(Var1) %>%
+              dplyr::rename(from = Var1, to = Var2) %>%
+              dplyr::mutate(lower_95hpd = 0,
                     upper_95hpd = 0)
 
   ## Create density object for SCM posteriors                  

@@ -224,24 +224,30 @@ sample_mutation_loci <- function(n,
   
   ## internal recursive core -- genome/chroms/chrom_lens computed once above,
   ## then just threaded through recursive top-up calls (rare, only fires if
-  ## an N/gap region is hit)
-  .sample_core <- function(n) {
+  ## an N/gap region is hit, or a locus collides with one already drawn --
+  ## `used` accumulates accepted loci across recursive top-ups so every
+  ## returned (chrom, pos) is unique, consistent with an infinite-sites
+  ## assumption; duplicate draws otherwise become non-negligible at these
+  ## mutation counts via the birthday paradox).
+  .sample_core <- function(n, used = character(0)) {
     n_draw <- ceiling(n * oversample)
-    
+
     ## vectorized chrom + position draws (no per-row loop)
     chrom_draw <- sample(chroms, n_draw, replace = TRUE,
                          prob = chrom_lens / sum(chrom_lens))
     pos_draw   <- as.integer(runif(n_draw, buffer + 1,
                                    chrom_lens[chrom_draw] - buffer))
-    
+    locus_draw <- paste(chrom_draw, pos_draw, sep = "_")
+
     ## single batched genome lookup instead of n_draw separate calls
     gr  <- GRanges(chrom_draw, IRanges(pos_draw, width = 1))
     ref <- as.character(getSeq(genome, gr))
-    
-    valid <- ref %in% c("A", "C", "G", "T")
+
+    valid <- ref %in% c("A", "C", "G", "T") &
+      !duplicated(locus_draw) & !(locus_draw %in% used)
     if (sum(valid) < n) {
       ## extremely rare at buffer >= 1000; simple one-shot top-up rather than looping
-      extra <- .sample_core(n - sum(valid))
+      extra <- .sample_core(n - sum(valid), used = c(used, locus_draw[valid]))
       chrom_out <- c(chrom_draw[valid], extra$chrom)[1:n]
       pos_out   <- c(pos_draw[valid],   extra$pos)[1:n]
       ref_out   <- c(ref[valid],        extra$ref)[1:n]
@@ -289,6 +295,12 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
   fmt_mat <- matrix(fmt_flat, nrow = n_mut, ncol = n_samp)
   colnames(fmt_mat) <- sample_names
 
+  ## AC/AF
+  alt_allele_count <- c("0/0" = 0L, "0/1" = 1L, "1/1" = 2L)[gl$GT]
+  dim(alt_allele_count) <- dim(gl$GT)
+  AC <- rowSums(alt_allele_count)
+  AF <- AC / (2 * n_samp)
+
   vcf_df <- data.frame(
     CHROM  = mut_table$chrom,
     POS    = mut_table$pos,
@@ -297,7 +309,7 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
     ALT    = mut_table$alt,
     QUAL   = ".",
     FILTER = filter,
-    INFO   = sprintf("EDGE=%d", edges),
+    INFO   = sprintf("AC=%d;AF=%.6g;EDGE=%d", AC, AF, edges),
     FORMAT = "GT:DP:AD:GQ:PL",
     stringsAsFactors = FALSE
   )
@@ -333,6 +345,8 @@ write_vcf_df <- function(vcf_df, file,
   }
 
   meta <- c(meta,
+    '##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele">',
+    '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency, for each ALT allele">',
     '##INFO=<ID=EDGE,Number=1,Type=Integer,Description="Tree edge on which the mutation arose">',
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
     '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
@@ -385,3 +399,4 @@ scale_branches_to_subs_per_site <- function(tr, mask,
   tr$edge.length <- tr$edge.length / n_accessible
   tr
 }
+

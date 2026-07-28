@@ -19,13 +19,15 @@ The objective of this notebook is to document our validation strategy for applyi
 
 This notebook will first describe the approach, key functions, and expected outcomes. Afterwards, additional layers of technical and biological variation will be introduced, including:
 
-- Sample size
+-   Sample size
 
-- Sequencing depth
+-   Sequencing depth
 
-- Missing data
+-   Missing data
 
-- ISM-violation rate
+-   Collapsing branch lengths equal to 0
+
+-   ISM-violation rate
 
 # Simulating hematopoiesis
 
@@ -63,19 +65,19 @@ hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
 
 Using the DFE above, we can simulate hematopoiesis with stochastic introduction of driver mutations using the `run_driver_process_sim()` wrapper in `rsimpop`. This function has several important parameters which will be defined below:
 
-- `simpop = NULL`: Default setting; do not use a pre-existing simpop object
+-   `simpop = NULL`: Default setting; do not use a pre-existing simpop object
 
-- `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
+-   `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
 
-- `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+-   `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
-- `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+-   `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
-- `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
+-   `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
 
-- `fitness = fitnessFn`: User-defined fitness function defined above
+-   `fitness = fitnessFn`: User-defined fitness function defined above
 
-- `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+-   `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
 ```{r, results = 'hide', warning = FALSE}
 
@@ -181,29 +183,29 @@ cat(paste("Mutation events on edge 10 are inherited by the following tips:\n",
 
 From this, we can use the `simulate_depth_and_ad` function to simulate sequencing data. Default parameters are set such that they mimic the structure of clean data described in both [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y) and [Coorens et al. 2025](https://www.nature.com/articles/s41596-024-00962-8).
 
-- `G`: Matrix output by `create_mut_df()`
+-   `G`: Matrix output by `create_mut_df()`
 
-- `D_bar = 20`: Target mean sequencing depth across the whole matrix
+-   `D_bar = 20`: Target mean sequencing depth across the whole matrix
 
-- `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style min_cov)
+-   `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style min_cov)
 
-- `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
+-   `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
 
-- `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
+-   `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
 
-- `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
+-   `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
 
-- `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
+-   `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
 
-- `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
+-   `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
 
-- `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
+-   `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
 
-- `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
+-   `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
 
-- `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
+-   `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
 
-- `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
+-   `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
 
 ```{r}
 
@@ -241,8 +243,8 @@ This structure can be exported as a VCF file with `write_vcf_df()`; we will writ
 
 ```{r}
 
-write_vcf_df(vcf_df, file = "test_sim.vcf")
-write.tree(tr_mol, file = "test_sim.nwk")
+write_vcf_df(vcf_df, file = "test_sim/test_sim.vcf")
+write.tree(tr_mol, file = "test_sim/test_sim.nwk")
 
 ```
 
@@ -252,4 +254,43 @@ Given the simulated tree and somatic variants above, we can now perform SCM and 
 
 The three critical components for modeling somatic SNVs with SCM are (1) the phylogeny with branch lengths measured in substitutions per site, (2) the VCF file with somatic SNVs and their associated confidence metrics (`PL` scores), and (3) a genotype substitution model fit to the phylogeny in (1). Below, we'll use a substitution model fit with `CellPhy` to the ground truth tree.
 
+The `CellPhy` command used to fit model parameters was the following:
 
+```         
+cellphy.sh \
+    RAXML \
+    --evaluate \
+    --msa test_sim/test_sim.nwk \
+    --msa-format vcf \
+    --model GT10+FO \
+    --tree test_sim/test_sim.vcf \
+    --prefix cellphy \
+    --threads 8 \
+    --force perf_threads
+```
+
+As the function above does produce a phylogeny with branch lengths adjusted for the fit substitution model parameters, a small comparison will be performed below between the ground truth tree and the `bestTree` output by `CellPhy`. The tree output by CellPhy will be used later, as the branch lengths are scaled to the substitution model fit.
+
+```{r}
+
+# read tree
+cellphy_tr <- read.tree("test_sim/cellphy.raxml.bestTree")
+
+# Robinson-Foulds distance
+TreeDist::RobinsonFoulds(tr_mol, cellphy_tr, normalize = TRUE)
+
+```
+
+In preparation for applying SCM, we'll load all the functions below:
+
+```{r, warning = FALSE}
+
+suppressPackageStartupMessages(
+  source("../../../smk/workflow/bin/SCM.smk.R")
+)
+
+```
+
+## Validating SCM output
+
+The SCM snakemake pipeline was run on the simulated data above with 100 SCM preplicates per locus. 
