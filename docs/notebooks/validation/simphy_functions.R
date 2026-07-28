@@ -6,6 +6,7 @@ library(rsimpop)
 library(truncdist)
 library(BSgenome.Hsapiens.UCSC.hg38)  
 library(GenomicRanges)
+library(rtracklayer)
 
 # Gamma distribution for fitness effects of driver mutations, as estimated by Mitchell et al. 2022
 genGammaFitness <- function(shape = 0.47, rate = 34) {
@@ -302,4 +303,85 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
   )
 
   cbind(vcf_df, as.data.frame(fmt_mat, stringsAsFactors = FALSE))
+}
+
+## Write a build_vcf_df() data frame out to a VCF v4.2 file
+write_vcf_df <- function(vcf_df, file,
+                         chrom_order = paste0("chr", c(1:22, "X")),
+                         contig_lengths = "auto",
+                         sort = TRUE,
+                         source = "simphy_functions.R") {
+
+  ## Default: declare a ##contig line for every CHROM actually present, sized
+  ## from the same reference genome sample_mutation_loci() draws loci from.
+  ## htslib-based readers (e.g. the raxml-ng build CellPhy ships) treat any
+  ## CHROM missing a ##contig header as a warning-worthy anomaly, so this
+  ## should not be left NULL unless you really want an unheadered VCF.
+  if (identical(contig_lengths, "auto")) {
+    chroms <- intersect(chrom_order, unique(vcf_df$CHROM))
+    contig_lengths <- GenomeInfoDb::seqlengths(BSgenome.Hsapiens.UCSC.hg38)[chroms]
+  }
+
+  meta <- c(
+    "##fileformat=VCFv4.2",
+    sprintf("##source=%s", source)
+  )
+
+  if (!is.null(contig_lengths)) {
+    meta <- c(meta, sprintf("##contig=<ID=%s,length=%d>",
+                            names(contig_lengths), contig_lengths))
+  }
+
+  meta <- c(meta,
+    '##INFO=<ID=EDGE,Number=1,Type=Integer,Description="Tree edge on which the mutation arose">',
+    '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
+    '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
+    '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles">',
+    '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">',
+    '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled genotype likelihoods">'
+  )
+
+  if (sort) {
+    ord <- order(factor(vcf_df$CHROM, levels = chrom_order), vcf_df$POS)
+    vcf_df <- vcf_df[ord, ]
+  }
+
+  fixed_cols  <- c("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT")
+  sample_cols <- setdiff(colnames(vcf_df), fixed_cols)
+
+  header_line <- paste(c("#CHROM", fixed_cols[-1], sample_cols), collapse = "\t")
+  body_lines  <- do.call(paste, c(as.list(vcf_df[, c(fixed_cols, sample_cols)]), sep = "\t"))
+
+  writeLines(c(meta, header_line, body_lines), con = file)
+  invisible(file)
+}
+
+## Rescale a phylo object's branch lengths from raw mutation counts (as held
+## by tr <- get_phylo_object(st_mut) %>% drop.tip("s1")) into a molecular
+## phylogeny with branch lengths in substitutions/site. NOTE: The genome 
+## accessibility mask here is assumed to be the "good sites"
+scale_branches_to_subs_per_site <- function(tr, mask,
+                                            mask_chroms = paste0("chr", c(1:22, "X"))) {
+
+  stopifnot(inherits(tr, "phylo"))
+
+  ## `mask` may be a path/URL to the accessibility mask (BED/BED.gz, e.g. the
+  ## 1000 Genomes "strict" or "pilot" whole-genome accessibility mask), or an
+  ## already-imported GRanges of accessible intervals.
+  mask_gr <- if (is.character(mask)) rtracklayer::import(mask, format = "bed") else mask
+
+  ## 1000G masks are typically Ensembl-style ("1", "2", ..., "X") rather than
+  ## UCSC-style ("chr1", "chr2", ..., "chrX"); harmonise to match mask_chroms.
+  if (!any(GenomeInfoDb::seqlevels(mask_gr) %in% mask_chroms)) {
+    GenomeInfoDb::seqlevels(mask_gr) <- paste0("chr", GenomeInfoDb::seqlevels(mask_gr))
+  }
+
+  mask_gr <- GenomicRanges::reduce(mask_gr)
+  mask_gr <- mask_gr[GenomeInfoDb::seqnames(mask_gr) %in% mask_chroms]
+
+  n_accessible <- sum(as.numeric(GenomicRanges::width(mask_gr)))
+  stopifnot(n_accessible > 0)
+
+  tr$edge.length <- tr$edge.length / n_accessible
+  tr
 }

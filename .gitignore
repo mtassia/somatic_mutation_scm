@@ -8,5 +8,6 @@ smk/logs/
 smk/results/
 smk/sandbox/
 sandbox/
+cellphy/
 .lintr
 .Rproj.user
