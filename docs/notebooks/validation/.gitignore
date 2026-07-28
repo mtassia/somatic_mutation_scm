@@ -1,4 +1,6 @@
 .RData
+.RDataTmp
 .Rhistory
 .Rproj.user
 *.Rproj
+*.aux

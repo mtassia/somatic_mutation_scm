@@ -214,7 +214,8 @@ vcf_df <- build_vcf_df(G = mut_mat,
                        DP = sim_reads$DP, 
                        AD = sim_reads$AD, 
                        gl = sim_genotypes,
-                       edges = G$edge)
+                       edges = mut_mat$edge)
 
 head(vcf_df[, 1:10])
+
 ```
