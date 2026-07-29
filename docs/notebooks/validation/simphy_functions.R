@@ -198,13 +198,13 @@ simulate_GQ_PL_GT <- function(DP, AD, error_rate = 0) {
   PL2 <- pmin(round(-10 * (GL2 - m)), 255)
   
   ## GQ: GATK-style genotype quality = difference between the best PL (0)
-  ## and the second-best PL, capped at 99
-  PL_stack  <- array(c(PL0, PL1, PL2), dim = c(n_mut, n_samp, 3))
-  PL_sorted <- apply(PL_stack, c(1, 2), sort)   # 3 x n_mut x n_samp, ascending
-  GQ <- pmin(PL_sorted[2, , ], 99)
-  
-  ## called GT = argmin PL per site/sample
-  GT_idx <- apply(PL_stack, c(1, 2), which.min)   # 1=0/0, 2=0/1, 3=1/1
+  ## and the second-best PL, capped at 99. 
+  GQ <- pmin(PL0 + PL1 + PL2 - pmax(PL0, PL1, PL2) - pmin(PL0, PL1, PL2), 99)
+
+  ## called GT = argmin PL per site/sample. Vectorized in place of
+  ## apply(..., which.min) for the same reason as GQ above; first-index
+  ## tie-break (0/0 over 0/1 over 1/1) matches which.min()'s behavior.
+  GT_idx <- ifelse(PL0 <= PL1 & PL0 <= PL2, 1L, ifelse(PL1 <= PL2, 2L, 3L))
   GT_str <- matrix(c("0/0", "0/1", "1/1")[GT_idx], n_mut, n_samp)
   colnames(GT_str) <- colnames(PL0)
   
