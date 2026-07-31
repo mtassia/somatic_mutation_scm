@@ -10,7 +10,8 @@ output:
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(comment = "",
                       fig.align = 'center',
-                      out.width = "75%")
+                      out.width = "75%",
+                      warning = FALSE)
 ```
 
 # Overview
@@ -50,9 +51,12 @@ suppressMessages(
 `rsimpop` encodes fitness as increased rates of symmetric division (i.e., birth) for clones bearing a driver mutation. Here, we draw fitness effects from a gamma distribution using the parameters described in [Extended Data Fig 12 of *Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y/figures/17).
 
 ```{r}
+SEED <- 1212121
 
 # DFE function
-fitnessFn <- genGammaFitness(shape = 0.47, rate = 34) 
+fitnessFn <- genGammaFitness(shape = 0.47, 
+                             rate = 34, 
+                             seed = SEED) 
 
 # Plot DFE
 hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
@@ -82,7 +86,6 @@ Using the DFE above, we can simulate hematopoiesis with stochastic introduction 
 ```{r, results = 'hide', warning = FALSE}
 
 # Simulation seed
-SEED <- 1212121
 initSimPop(SEED, bForce = TRUE)
 
 # Run rsimpop
@@ -111,18 +114,30 @@ plot_tree_events(st_mut,
 
 ```
 
-Last before creating a mutation matrix that'll ultimately be used to approximate a VCF-like data structure, we need to extract the `phylo` object from the `simpop` output and remove the artificial out group (*s1*).
+Last before creating a mutation matrix that'll ultimately be used to approximate a VCF-like data structure, we need to extract the `phylo` object from the `simpop` output. The `get_phylo_object()` function also propagates the driver information. As such, we'll plot the driver events drawn for the full population, and overlay indicators to reflect the fitness coefficients sampled in the subset of 100 cells drawn above.
 
 ```{r, warning = FALSE}
 
 # Remove s1 from phylogeny
 tr <- get_phylo_object(st_mut)
 
-# Plot phylo
-ggtree(tr,
-       ladderize = FALSE) +
-  layout_dendrogram()
-
+# Plot fitness distribution
+sim$cfg$drivers %>%
+  mutate(pop = "Total") %>%
+  bind_rows(st_mut$cfg$drivers %>%
+              mutate(pop = "Sampled")) %>%
+  mutate(pop = factor(pop, levels = c("Total", "Sampled"))) %>%
+  ggplot(aes(x = fitness, fill = pop)) +
+  geom_histogram(alpha = 0.75, 
+                 position = "identity") +
+  scale_fill_npg(guide = "none") +
+  facet_wrap(~pop, ncol = 2, scales = "free_y") +
+  theme_cowplot() +
+  theme(legend.position = "top",
+        strip.background = element_blank(),
+        strip.text = element_text(face = "bold")) +
+  labs(x = "Fitness coefficient",
+       y = "Count")
 ```
 
 To compare this ground-truth tree (where branch lengths are scaled by the true mutation counts) against a molecular phylogeny, we need to rescale these raw counts by the size of the analyzable genome. Scaling will also account for the reduced genome access, as only genomic positions passing a genome-accessibility filter are the only loci realistically analyzed during phylogenetic inference (we use the [1000 Genomes Project genome-accessibility mask](https://ftp.1000genomes.org/vol1/ftp/release/20130502/supporting/accessible_genome_masks/)).
@@ -138,9 +153,6 @@ mask_path <- "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_g
 # Ground-truth molecular phylogeny, branch lengths in substitutions/site
 tr_mol <- scale_branches_to_subs_per_site(tr, mask = mask_path)
 
-ggtree(tr_mol, ladderize = FALSE) +
-  layout_dendrogram()
-
 ```
 
 ## Simulate mutation data
@@ -153,11 +165,14 @@ Because `rsimpop` tracks mutation origin alongside the "ground truth" simulated 
 mut_mat <- create_mut_df(tr)
 
 # Preview mutation matrix
-mut_mat[1:5, 1:5]
+mut_mat %>% 
+  filter(is_driver) %>%
+  select(1:9) %>%
+  head()
 
 ```
 
-The `G` object above is a matrix of 0s and 1s, where rows correspond to mutations and columns correspond to sampled cells. A value of 1 indicates that the mutation is present in the cell, while a value of 0 indicates that it is absent. An additional column is included `G[,1]` to track the edge on which the mutation arose -- this is important for tracking accuracy of SCM later.
+The `G` object above is a dataframe that contains both meta data (`mutation_id`, `is_driver`, `selection_coefficient`, and `edge`). as well as a numeric boolean array of 0s and 1s, where rows correspond to mutations and columns correspond to sampled cells. A value of 1 indicates that the mutation is present in the cell, while a value of 0 indicates that it is absent.
 
 For example:
 
@@ -170,11 +185,13 @@ plot.phylo(tr,
            cex = 0.5)
 edgelabels(edge = 12)
 
-# For the first row of G where G[,1] == 12, print columns where mutation is present
-ingroup <- mut_mat[mut_mat[,1] == 12,] %>%
-  head(n = 1) %>%
-  colnames(.)[as.vector(.) == 1] %>%
-  colnames()
+# For the first row of mut_mat where mut_mat$edge == 1, print columns where mutation is present
+ingroup <- mut_mat %>%
+    filter(edge == 12) %>%
+    head(n = 1) %>%
+    dplyr::select(!1:4) %>%
+    as.vector() == 1
+ingroup <- names(ingroup[ingroup])
 
 cat(paste("Mutation events on edge 12 are inherited by the following tips:\n",
           ingroup[1],
@@ -211,8 +228,51 @@ From this, we can use the `simulate_depth_and_ad` function to simulate sequencin
 
 ```{r}
 
-sim_reads <- simulate_DP_and_AD(G = mut_mat)
+sim_reads <- simulate_DP_and_AD(G = mut_mat,
+                                seed = SEED)
 glimpse(sim_reads)
+
+```
+
+The `simulate_DP_and_AD()` function includes multiple stochastic elements that simulate site factors and sample factors that affect read depth. Below, we'll visualize the realized distribution of mean read depth across all sites and samples.
+
+```{r, warning = FALSE, echo = FALSE}
+library(patchwork)
+
+# Plot read depth distribution per site
+g1 <- ggplot(rowMeans(sim_reads$DP) %>% 
+         as.data.frame() %>%
+         rename("." = "dbar"),
+       aes(x = dbar)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "black") +
+  geom_vline(xintercept = mean(rowMeans(sim_reads$DP)),
+             color = "red",
+             linetype = "dashed") +
+  scale_x_continuous(limits = c(0,100),
+                     breaks = seq(0,100,20)) +
+  theme_minimal() +
+  labs(title = "Site-level depth distribution",
+       x = "Read Depth (DP)",
+       y = "Frequency")
+
+# Plot read depth distribution per sample
+g2 <- ggplot(colMeans(sim_reads$DP) %>% 
+         as.data.frame() %>%
+         rename("." = "dbar"),
+       aes(x = dbar)) +
+  geom_histogram(bins = 50, fill = "salmon", color = "black") +
+  geom_vline(xintercept = mean(rowMeans(sim_reads$DP)),
+             color = "blue",
+             linetype = "dashed") +
+  scale_x_continuous(limits = c(0,50),
+                     breaks = seq(0,50,10)) +
+  theme_minimal() +
+  labs(title = "Sample-level depth distribution",
+       x = "Read Depth (DP)",
+       y = "Frequency")
+
+# Render plot
+(g1 | g2) + plot_layout(ncol = 2, axis_titles = "collect")
 
 ```
 
@@ -230,22 +290,37 @@ Finally, we will sample sites from the human genome and assign these to the reco
 
 ```{r}
 
-mut_table <- sample_mutation_loci(nrow(sim_genotypes$GT))
+mut_table <- sample_mutation_loci(nrow(sim_genotypes$GT),
+                                  seed = SEED)
 vcf_df <- build_vcf_df(G = mut_mat, 
                        DP = sim_reads$DP, 
                        AD = sim_reads$AD, 
                        gl = sim_genotypes,
                        edges = mut_mat$edge)
 
-head(vcf_df[, 1:10])
+head(vcf_df[, 1:11])
 
 ```
 
-This structure can be exported as a VCF file with `write_vcf_df()`; we will write the ground-truth molecular phylogeny to file alongside it.
+Note that because some samples will have zero coverage at a locus, this can result in some true variants being unobserved in the simulated VCF structure. For instance:
 
 ```{r}
 
-write_vcf_df(vcf_df, file = "test_sim/test_sim.vcf")
+vcf_df %>% 
+  filter(grepl(x = INFO, pattern = "AC=0")) %>%
+  dplyr::select(1:8) %>%
+  head(n = 5)
+
+```
+
+The VCF-like data frame can be exported as a VCF file with `write_vcf_df()`; we will write the ground-truth molecular phylogeny to file alongside it.
+
+```{r}
+
+write_vcf_df(vcf_df %>% filter(!grepl(x = INFO,
+                                      pattern = "AC=0")),
+             file = "test_sim/test_sim.vcf",
+             tree = tr)
 write.tree(tr_mol, file = "test_sim/test_sim.nwk")
 
 ```
@@ -279,9 +354,11 @@ As the function above does produce a phylogeny with branch lengths adjusted for 
 cellphy_tr <- read.tree("test_sim/cellphy.raxml.bestTree")
 
 # Robinson-Foulds distance
-TreeDist::RobinsonFoulds(tr_mol, cellphy_tr, normalize = TRUE)
+RobinsonFoulds(tr_mol, cellphy_tr, normalize = TRUE)
 
 ```
+
+## Validating SCM output with "ground-truth" tree
 
 In preparation for applying SCM, we'll load all the functions below:
 
@@ -293,6 +370,207 @@ suppressPackageStartupMessages(
 
 ```
 
-## Validating SCM output
+The SCM Snakemake pipeline was run on the simulated data above with 100 SCM replicates per mutation. For qualitative insight, we will plot the SCM-scaled tree alongside the ground truth tree.
 
-The SCM snakemake pipeline was run on the simulated data above with 100 SCM preplicates per locus. 
+```{r, echo = FALSE}
+
+# Read SCM tree
+scm.tr <- read.tree(file = "test_sim/test_sim.scm.nwk")
+
+# Create multiphylo object for plotting
+trs <- list("Ground truth" = tr %>% drop.tip("s1"),
+            "SCM-scaled" = scm.tr)
+class(trs) <- "multiPhylo"
+
+# Plot multiphylo with ggtree
+ggtree(trs, aes(color = .id)) +
+  geom_tree(alpha = 0.5) +
+  scale_color_manual(values = c("Ground truth" = "black",
+                                "SCM-scaled" = "steelblue")) +
+  theme_tree2() +
+  theme(legend.position = "top") +
+  labs(x = "Somatic SNVs",
+       color = "")
+
+```
+
+In the figure above, we see that the SCM-scaled tree is conservative in placing mutations to edges relative to ground truth. Before doing a quantitative comparison of SCM performance per-mutation, below we will compare genotype quality scores for variants that are not assigned to the tree. Below is a histogram showing the difference in genotype quality scores between variants assigned and unassigned to the tree. This quality, while limiting the reproducibility of the ground-truth tree, is nonetheless valuable for accuracy.
+
+```{r, warning = FALSE, echo = FALSE}
+
+# Read SCM summaries from h5 file
+chrs <- h5ls("test_sim/test_sim.h5", recursive = F)$name
+
+# Load SCM data into a data frame
+scm.df <- mclapply(chrs, function(x) {
+  h5read("test_sim/test_sim.h5", paste0(x, "/summary"))
+}, mc.cores = 4) %>%
+  unlist(recursive = FALSE) %>%
+  bind_rows() %>%
+  tibble()
+
+# Subset to loci unassigned to edges
+missing_muts <- scm.df %>% 
+  filter(muts_assigned == 0) %>% 
+  mutate(loc_id = paste0(chr, ":", locus)) %>%
+  pull(loc_id)
+
+# Subset vcf_df to loci unassigned to edges
+missing_mut_vcf <- vcf_df %>% 
+  mutate(loc_id = paste0(CHROM,":",POS),
+         .before = 1) %>% 
+  filter(loc_id %in% missing_muts) %>%
+  pivot_longer(cols = starts_with("s"), 
+               names_to = "sample", 
+               values_to = "fmt_values") %>% 
+  separate_wider_delim(cols = fmt_values,
+                       delim = ":",
+                       names = c("GT", "DP", "AD", "GQ", "PL")) %>%
+  filter(GT != "0/0")
+
+# Subset vcf_df to loci assigned to edges
+assigned_mut_df <- vcf_df %>% 
+  mutate(loc_id = paste0(CHROM,":",POS),
+         .before = 1) %>% 
+  filter(!loc_id %in% missing_muts) %>%
+  pivot_longer(cols = starts_with("s"), 
+               names_to = "sample", 
+               values_to = "fmt_values") %>% 
+  separate_wider_delim(cols = fmt_values,
+                       delim = ":",
+                       names = c("GT", "DP", "AD", "GQ", "PL")) %>%
+  filter(GT != "0/0")
+
+# Combine vcf subsets
+plot_vcf_df <-
+  bind_rows(
+    missing_mut_vcf %>% mutate(assignment = "missing"),
+    assigned_mut_df %>% mutate(assignment = "assigned")
+  )
+  
+# Plot GQ distribution as a histogram
+ggplot(plot_vcf_df,
+       aes(x = as.numeric(GQ),
+           fill = assignment),
+       ) +
+  geom_histogram(aes(y = after_stat(ncount)),
+                 binwidth = 1) +
+  scale_x_continuous(limits = c(0,100),
+                     breaks = seq(0,100,10)) +
+  scale_fill_npg() +
+  theme_cowplot() +
+  theme(legend.position = "top") +
+  labs(x = "GQ",
+       y = "proportion",
+       fill = "")
+
+```
+
+Next, we can ask about concordance between the SCM-inferred origins for the mutations and compare to ground truth:
+
+```{r, warning = FALSE, echo = FALSE}
+
+# Compare edge mapping (bipartitions) for each mutation 
+edge_comp.df <- compare_scm_edges(vcf_df = vcf_df,
+                                  h5f_path = "test_sim/test_sim.h5",
+                                  sim_tree = tr_mol,
+                                  scm_tree = scm.tr, 
+                                  cores = 4)
+
+# Subset to only mutations that have assignments and summarize concordance
+pcon <- edge_comp.df %>% 
+  filter(!is.na(as.integer(scm_assigned_edges))) %>%
+  dplyr::select(locus, correct) %>%
+  mutate(locus = gsub(x = locus,
+                      pattern = "_", 
+                      replacement = ":")) %>%
+  summarize(concordance = sum(correct)/n()) %>%
+  pull(concordance)
+
+paste("Concordance between SCM-inferred and ground truth mutation origins:", round(pcon, 3))
+  
+```
+
+Below, we plot a histogram of the distance between ground truth and SCM-inferred edges for all mismapped mutations.
+
+```{r, warning = FALSE, echo = FALSE}
+
+# Isolate mismapping variants
+incorrect.df <- edge_comp.df %>% 
+  filter(!is.na(as.integer(scm_assigned_edges))) %>%
+  mutate(locus = gsub(x = locus,
+                      pattern = "_", 
+                      replacement = ":")) %>%
+  filter(!correct)
+
+# Plot edge_distance for all mismapping mutations
+ggplot(incorrect.df,
+       aes(x = edge_distance)) +
+  geom_histogram(binwidth = 1,
+                 fill = "gray",
+                 color = "white") +
+  theme_cowplot() +
+  scale_x_continuous(breaks = seq(0, 10, 1)) +
+  labs(x = "edge distance",
+       y = "count")
+
+```
+
+The major error modality here is low depth at a variant locus. For example, the variant at `chr10:7337951` is truly present in `r edge_bipartitions(tr_mol)[17]`. Upon examination, however, these are the VCF records for these samples:
+
+```{r, echo = FALSE}
+
+samples <- edge_bipartitions(tr_mol)[17] %>% 
+  str_split(pattern = "\\|") %>% 
+  unlist()
+
+# Pull sample stats from simulated VCF
+vcf_df %>% 
+  mutate(loc_id = paste0(CHROM,":",POS),
+         .before = 1) %>%
+  filter(loc_id == "chr10:7337951") %>%
+  pivot_longer(cols = starts_with("s"), 
+               names_to = "sample", 
+               values_to = "fmt_values") %>% 
+  filter(sample %in% samples) %>%
+  separate_wider_delim(cols = fmt_values,
+                       delim = ":",
+                       names = c("GT", "DP", "AD", "GQ", "PL")) %>%
+  dplyr::select(sample, GT, DP, AD, GQ, PL)
+
+```
+
+```{r, echo = FALSE}
+
+# plot tree with truth group labeled and assigned group labeled
+plot.phylo(scm.tr, direction = "downwards", cex = 0.5)
+edgelabels(edge = incorrect.df %>%
+             filter(locus == "chr10:7337951") %>%
+  pull(scm_assigned_edges) %>%
+  as.integer(),
+    frame = "circle",
+    bg = "blue",
+    text = "T",
+    cex = 0.5)
+edgelabels(edge = incorrect.df %>%
+             filter(locus == "chr10:7337951") %>%
+  pull(truth_edge_scm_numbering) %>%
+  as.integer(),
+    frame = "circle",
+    bg = "blue",
+    text = "T",
+    cex = 0.5)
+edgelabels(edge = incorrect.df %>%
+             filter(locus == "chr10:7337951") %>%
+  pull(scm_assigned_edges) %>%
+  as.integer(),
+    frame = "circle",
+    bg = "red",
+    text = "",
+    cex = 0.5)
+
+```
+## Validating SCM output with "collapsed" tree
+
+Instead of using the simulated "ground-truth", we can also apply the SCM to a "collapsed" tree, where edges with length $0$ are removed to create polytomies. 
+

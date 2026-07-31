@@ -7,14 +7,44 @@ library(truncdist)
 library(BSgenome.Hsapiens.UCSC.hg38)  
 library(GenomicRanges)
 library(rtracklayer)
+library(TreeDist)
+library(cowplot)
+library(ggsci)
+library(pbmcapply)
 
 # Gamma distribution for fitness effects of driver mutations, as estimated by Mitchell et al. 2022
-genGammaFitness <- function(shape = 0.47, rate = 34) {
+genGammaFitness <- function(shape = 0.47, rate = 34, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
   function() rgamma(n = 1, shape = shape, rate = rate)
 }
 
 
-# Create a phylo object from rsimpop output
+# Generate n random hex hash strings (nchar characters each), for use as
+# opaque per-mutation IDs. At nchar = 12 the collision probability is 
+# negligible for any realistic number of mutations.
+random_hash <- function(n, nchar = 12) {
+  hex <- c(0:9, letters[1:6])
+  apply(matrix(sample(hex, n * nchar, replace = TRUE), nrow = n), 1, paste, collapse = "")
+}
+
+# Combine a driver-event table (as in simpop$events -- node/timing) and a
+# driver->fitness lookup (as in simpop$cfg$drivers) into a single data
+# frame. Returns NULL if either input is NULL (e.g. a tree that didn't 
+# originate from run_driver_process_sim()). Called once by get_phylo_object() 
+# and stashed as tree$driver_info.
+get_driver_info <- function(events, driver_fitness) {
+  if (is.null(events) || is.null(driver_fitness)) return(NULL)
+
+  drivers <- events[events$driverid > 0, c("driverid", "node"), drop = FALSE]
+  colnames(drivers) <- c("driver_id", "node")
+  drivers$fitness <- driver_fitness$fitness[
+    match(drivers$driver_id, driver_fitness$driver)]
+  drivers$mutation_id <- random_hash(nrow(drivers))
+
+  drivers[, c("driver_id", "fitness", "node", "mutation_id")]
+}
+
+# Create a phylo object from rsimpop output. 
 get_phylo_object <- function(simpop){
   tr <- list()
   tr$edge.length <- simpop$edge.length
@@ -23,7 +53,9 @@ get_phylo_object <- function(simpop){
   tr$Nnode <- simpop$Nnode
   attr(tr, "class") <- "phylo"
   attr(tr, "order") <- "cladewise"
-  
+
+  tr$driver_info <- get_driver_info(simpop$events, simpop$cfg$drivers)
+
   return(tr)
 }
 
@@ -40,6 +72,172 @@ get_tips_from_node <- function(phylo, node) {
   return(tips)
 }
 
+# Map every edge in a tree to a canonical string key identifying its
+# descendant tip-set (its bipartition). This is stable across rerooting,
+# ladderizing.
+edge_bipartitions <- function(tree) {
+  n_tip <- length(tree$tip.label)
+  keys <- vapply(seq_len(nrow(tree$edge)), function(i) {
+    node <- get_edge_descendant(tree, i)
+    tips <- if (node <= n_tip) {
+      tree$tip.label[node]
+    } else {
+      tree$tip.label[get_tips_from_node(tree, node)]
+    }
+    paste(sort(tips), collapse = "|")
+  }, character(1))
+  names(keys) <- as.character(seq_len(nrow(tree$edge)))
+  keys
+}
+
+# Translate an edge index from `from_tree`'s numbering into the
+# corresponding edge index in `to_tree`'s numbering, by matching descendant
+# tip-sets (bipartitions) rather than raw row position. Returns NA if no
+# edge in `to_tree` has the same descendant tip-set (a real topological
+# mismatch, e.g. if `to_tree` is an inferred rather than the true tree).
+# `from_keys`/`to_keys` are the precomputed output of edge_bipartitions().
+translate_edge_index <- function(edge_idx, from_keys, to_keys) {
+  target_key <- from_keys[as.character(edge_idx)]
+  match_idx  <- names(to_keys)[to_keys == target_key]
+  if (length(match_idx) == 0) return(NA_integer_)
+  as.integer(match_idx)
+}
+
+# Precompute all-pairs node distances (in edge count, not branch length) for
+# a tree, for fast repeated edge_distance() lookups. Achieved by running
+# ape::dist.nodes() (patristic distance) on a copy of the tree with every
+# branch length set to 1, turning it into a pure edge-count distance.
+node_edge_distances <- function(tree) {
+  unit_tree <- tree
+  unit_tree$edge.length <- rep(1, nrow(tree$edge))
+  ape::dist.nodes(unit_tree)
+}
+
+# Topological distance (in number of edges) between two edges of `tree`,
+# defined as the edge-count distance between their child/descendant nodes
+# (two edges sharing a parent -- siblings -- are 2 apart: child -> parent ->
+# child). Pass a precomputed node_edge_distances() matrix via `node_dist` to
+# avoid recomputing it on every call.
+edge_distance <- function(edge_i, edge_j, tree, node_dist = NULL) {
+  if (is.null(node_dist)) node_dist <- node_edge_distances(tree)
+  node_dist[get_edge_descendant(tree, edge_i), get_edge_descendant(tree, edge_j)]
+}
+
+# Read every locus's SCM-assigned edge(s) straight out of a multi_scm() h5
+# output file.
+#
+# Works on both h5 layouts this pipeline produces: the flat
+# /assigned_edges/<locus> structure multi_scm() itself writes (e.g. the
+# per-chromosome results/{sample}.{chrom}.h5 files from the scm_chromosome
+# rule), and the chromosome-nested /<chrom>/assigned_edges/<locus>
+# structure produced by merge_h5_files() (results/merged/{sample}.h5, the
+# pipeline's actual final output -- the per-chromosome files are marked
+# temp() and normally won't exist on disk once merge_h5 has run).
+#
+# RETURNS: data.frame, one row per locus found in the h5 file, with
+# `scm_assigned_edges` (comma-separated if SCM placed more than one state
+# change for that locus) and `n_edges_assigned`.
+read_assigned_edges <- function(h5f_path) {
+
+  ## Find every assigned_edges group regardless of nesting depth, and map
+  ## each locus to the full h5 path of its dataset.
+  h5_contents <- rhdf5::h5ls(h5f_path, recursive = TRUE)
+  ae_groups   <- h5_contents %>%
+    dplyr::filter(basename(group) == "assigned_edges")
+
+  if (nrow(ae_groups) == 0) {
+    warning("No assigned_edges group found in this h5 file.")
+    return(data.frame())
+  }
+
+  loc_paths <- setNames(paste0(ae_groups$group, "/", ae_groups$name), ae_groups$name)
+
+  lapply(names(loc_paths), function(loc) {
+    scm_vec <- rhdf5::h5read(h5f_path, loc_paths[[loc]])
+    scm_idx <- which(scm_vec == 1)
+
+    data.frame(
+      locus              = loc,
+      scm_assigned_edges = paste(scm_idx, collapse = ","),
+      n_edges_assigned   = length(scm_idx),
+      stringsAsFactors = FALSE
+    )
+  }) %>% dplyr::bind_rows()
+}
+
+# Compare SCM's inferred mutation-to-edge assignment (multi_scm() h5 output,
+# via read_assigned_edges()) against the ground-truth edge each mutation was
+# actually emitted on during simulation (the EDGE= INFO tag in the VCF
+# written by build_vcf_df()).
+#
+# ARGUMENTS:
+#   - vcf_df:
+#       data.frame from build_vcf_df()/write_vcf_df(), with the ground-truth
+#       edge in INFO as "EDGE=<n>", indexed against `sim_tree`
+#   - h5f_path:
+#       Path to the h5 file written by multi_scm()
+#   - sim_tree:
+#       The ground-truth simulation tree -- i.e. the exact tree object
+#       `edges` was indexed against when build_vcf_df() was called
+#   - scm_tree:
+#       The tree object actually passed to multi_scm() for this run (e.g.
+#       after chromosome_scm.R's rooting/ladderizing)
+#
+# RETURNS: data.frame, one row per locus present in both vcf_df and the h5
+# file's assigned_edges group(s), with the ground-truth edge translated into
+# scm_tree's numbering, the edge(s) SCM actually assigned, a `correct` flag
+# (TRUE only when SCM assigned exactly one edge and it matches), and
+# `edge_distance` -- the edge-count distance (see edge_distance()) between
+# the true edge and the nearest edge SCM actually assigned, for grading
+# near-misses rather than just right/wrong. NA when there's a topology
+# mismatch or SCM assigned zero edges (nothing to measure distance to).
+compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1) {
+
+  sim_keys <- edge_bipartitions(sim_tree)
+  scm_keys <- edge_bipartitions(scm_tree)
+  scm_node_dist <- node_edge_distances(scm_tree)
+
+  locus      <- paste(vcf_df$CHROM, vcf_df$POS, sep = "_")
+  truth_edge <- as.integer(sub(".*EDGE=(\\d+).*", "\\1", vcf_df$INFO))
+
+  assigned <- read_assigned_edges(h5f_path)
+  if (nrow(assigned) == 0) return(data.frame())
+
+  shared <- intersect(locus, assigned$locus)
+  if (length(shared) == 0) {
+    warning("No loci shared between vcf_df and the h5 file's assigned_edges group(s).")
+    return(data.frame())
+  }
+
+  mclapply(shared, function(loc) {
+    truth_idx     <- truth_edge[match(loc, locus)]
+    truth_scm_idx <- translate_edge_index(truth_idx, sim_keys, scm_keys)
+
+    scm_str <- assigned$scm_assigned_edges[assigned$locus == loc]
+    scm_idx <- if (nzchar(scm_str)) as.integer(strsplit(scm_str, ",")[[1]]) else integer(0)
+
+    edge_dist <- if (is.na(truth_scm_idx) || length(scm_idx) == 0) {
+      NA_integer_
+    } else {
+      min(vapply(scm_idx, function(e) edge_distance(truth_scm_idx, e, scm_tree, scm_node_dist),
+                 numeric(1)))
+    }
+
+    data.frame(
+      locus                    = loc,
+      truth_edge_sim_numbering = truth_idx,
+      truth_edge_scm_numbering = truth_scm_idx,
+      scm_assigned_edges       = paste(scm_idx, collapse = ","),
+      topology_mismatch        = is.na(truth_scm_idx),
+      correct                  = !is.na(truth_scm_idx) &&
+                                  length(scm_idx) == 1 &&
+                                  truth_scm_idx == scm_idx,
+      edge_distance            = edge_dist,
+      stringsAsFactors = FALSE
+    )
+  }, mc.cores = cores) %>% dplyr::bind_rows()
+}
+
 # Function to generate a boolean vector of mutation presence for all tips descendant of a node
 create_mut_vector <- function(phylo, node) {
   tips <- get_tips_from_node(phylo, node)
@@ -48,22 +246,76 @@ create_mut_vector <- function(phylo, node) {
   return(mut_vector)
 }
 
-# function to create a data frame of mutation presence
-create_mut_df <- function(tree) {
+# Per-mutation metadata columns create_mut_df() adds alongside "edge" and the
+# tip-label sample columns. Anything downstream that treats a create_mut_df()
+# data frame as a plain (edge + samples) matrix -- e.g. simulate_DP_and_AD(),
+# build_vcf_df() -- must strip *all* of these, not just "edge", to correctly
+# identify which columns are genuine sample genotypes.
+MUT_META_COLS <- c("edge", "mutation_id", "is_driver", "selection_coefficient")
+
+# function to create a data frame of mutation presence.
+# `driver_info` defaults to tree$driver_info -- set once, by
+# get_phylo_object(), at tree-construction time -- so a driver's
+# mutation_id here is guaranteed to match whatever's already on the tree
+# object.
+create_mut_df <- function(tree, driver_info = tree$driver_info) {
   mat <- matrix(nrow = 0, ncol = length(tree$tip.label) + 1)
-  
+
+  ## Driver info: see get_driver_info(). Since every non-root node has
+  ## exactly one incoming edge, matching a driver's `node` against
+  ## tree$edge[,2] identifies which edge it evolved on.
+  has_driver_info <- !is.null(driver_info)
+
+  mutation_id <- character(0)
+  is_driver <- logical(0)
+  selection_coefficient <- numeric(0)
+
   for (i in 1:nrow(tree$edge)) {
-    if (tree$edge.length[i] > 0) {
+    n_i <- tree$edge.length[i]
+    if (n_i > 0) {
       mut_vector <- c(i,create_mut_vector(tree, get_edge_descendant(tree, i)))
-      mut_matrix <- matrix(rep(mut_vector, tree$edge.length[i]), 
-                           nrow = tree$edge.length[i], 
+      mut_matrix <- matrix(rep(mut_vector, n_i),
+                           nrow = n_i,
                            byrow = TRUE)
       mat <- rbind(mat, mut_matrix)
+
+      ## A driver event marks the branch it arose on (via its child node),
+      ## not a specific one of the n_i background mutations distributed
+      ## along that branch -- treat the earliest-matching driver(s) as the
+      ## first row(s), reusing the mutation_id already assigned to that
+      ## driver event in driver_info, and the rest (if n_i is larger) as
+      ## passengers with a freshly generated hash.
+      driver_flags <- rep(FALSE, n_i)
+      sel_coefs     <- rep(NA_real_, n_i)
+      ids           <- character(n_i)
+      n_hits <- 0
+      if (has_driver_info) {
+        child_node <- tree$edge[i, 2]
+        hits <- driver_info[driver_info$node == child_node, , drop = FALSE]
+        if (nrow(hits) > 0) {
+          n_hits <- min(nrow(hits), n_i)  # guard: more drivers matched than mutations to tag on this edge
+          driver_flags[seq_len(n_hits)] <- TRUE
+          sel_coefs[seq_len(n_hits)] <- hits$fitness[seq_len(n_hits)]
+          ids[seq_len(n_hits)] <- hits$mutation_id[seq_len(n_hits)]
+        }
+      }
+      if (n_hits < n_i) {
+        ids[(n_hits + 1):n_i] <- random_hash(n_i - n_hits)
+      }
+
+      is_driver <- c(is_driver, driver_flags)
+      selection_coefficient <- c(selection_coefficient, sel_coefs)
+      mutation_id <- c(mutation_id, ids)
     }
-  }  
-  
+  }
+
   colnames(mat) <- c("edge",tree$tip.label)
   mat <- as.data.frame(mat)
+  mat <- mat %>%
+    mutate(mutation_id = mutation_id,
+           is_driver = is_driver,
+           selection_coefficient = selection_coefficient,
+           .before = 1)
   return(mat)
 }
 
@@ -78,11 +330,12 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
                                   site_conc_shape = 4,   # gamma shape for the distribution of per-site VAF concentration
                                   site_conc_rate  = 0.3, # gamma rate for the distribution of per-site VAF concentration
                                   error_rate     = 0.00, # sequencing/mapping error rate (alt reads at true hom-ref sites)
-                                  dropout_rate   = 0.00) {# P(complete allelic dropout | truly heterozygous site)
-  
-  if (colnames(G)[1] == "edge") {
-    G <- G[,-1]  # remove the edge column if present
-  }
+                                  dropout_rate   = 0.00, # P(complete allelic dropout | truly heterozygous site)
+                                  seed           = NULL) {# optional RNG seed for reproducible draws
+
+  if (!is.null(seed)) set.seed(seed)
+
+  G <- G[, !colnames(G) %in% MUT_META_COLS, drop = FALSE]  # keep only sample columns
   
   n_mut  <- nrow(G)    # number of mutation/site rows in the ground-truth genotype matrix
   n_samp <- ncol(G)    # number of sample/tip columns
@@ -216,8 +469,11 @@ sample_mutation_loci <- function(n,
                                  genome_pkg = "BSgenome.Hsapiens.UCSC.hg38",
                                  chroms     = paste0("chr", c(1:22, "X")),
                                  buffer     = 1000,
-                                 oversample = 1.02) {
-  
+                                 oversample = 1.02,
+                                 seed       = NULL) {
+
+  if (!is.null(seed)) set.seed(seed)
+
   library(genome_pkg, character.only = TRUE)
   genome     <- get(genome_pkg)
   chrom_lens <- seqlengths(genome)[chroms]
@@ -275,10 +531,20 @@ sample_mutation_loci <- function(n,
 build_vcf_df <- function(G, DP, AD, gl, edges,
                          id = ".", filter = "PASS") {
 
-  if (colnames(G)[1] == "edge") {
-    G <- G[,-1]  # remove the edge column if present
+  ## Pull per-mutation metadata off G (see create_mut_df()) before it gets
+  ## stripped down to just sample columns below. `id` is only a fallback for
+  ## a G that doesn't carry a mutation_id column (e.g. not from
+  ## create_mut_df()); driver status defaults to non-driver in that case.
+  mutation_id <- if ("mutation_id" %in% colnames(G)) G$mutation_id else id
+  is_driver   <- if ("is_driver" %in% colnames(G)) G$is_driver else FALSE
+  selection_coefficient <- if ("selection_coefficient" %in% colnames(G)) {
+    G$selection_coefficient
+  } else {
+    NA_real_
   }
-  
+
+  G <- G[, !colnames(G) %in% MUT_META_COLS, drop = FALSE]  # keep only sample columns
+
   sample_names <- colnames(G)
   
   n_mut  <- nrow(mut_table)
@@ -295,21 +561,24 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
   fmt_mat <- matrix(fmt_flat, nrow = n_mut, ncol = n_samp)
   colnames(fmt_mat) <- sample_names
 
-  ## AC/AF
+  ## INFO flags
   alt_allele_count <- c("0/0" = 0L, "0/1" = 1L, "1/1" = 2L)[gl$GT]
   dim(alt_allele_count) <- dim(gl$GT)
   AC <- rowSums(alt_allele_count)
   AF <- AC / (2 * n_samp)
+  driver_flag <- as.integer(is_driver)
+  sel_coef_out <- ifelse(is_driver, selection_coefficient, 0)
 
   vcf_df <- data.frame(
     CHROM  = mut_table$chrom,
     POS    = mut_table$pos,
-    ID     = id,
+    ID     = mutation_id,
     REF    = mut_table$ref,
     ALT    = mut_table$alt,
     QUAL   = ".",
     FILTER = filter,
-    INFO   = sprintf("AC=%d;AF=%.6g;EDGE=%d", AC, AF, edges),
+    INFO   = sprintf("AC=%d;AF=%.6g;EDGE=%d;DRIVER=%d;S=%.6g",
+                     AC, AF, edges, driver_flag, sel_coef_out),
     FORMAT = "GT:DP:AD:GQ:PL",
     stringsAsFactors = FALSE
   )
@@ -318,11 +587,18 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
 }
 
 ## Write a build_vcf_df() data frame out to a VCF v4.2 file
-write_vcf_df <- function(vcf_df, file,
+write_vcf_df <- function(vcf_df, file, tree,
                          chrom_order = paste0("chr", c(1:22, "X")),
                          contig_lengths = "auto",
                          sort = TRUE,
                          source = "simphy_functions.R") {
+
+  ## `tree` is the ground-truth simulation tree the VCF's EDGE= INFO values
+  ## are indexed against (see build_vcf_df()) -- required so the tree that
+  ## defines "ground truth" travels with the VCF itself, rather than only
+  ## existing as a separate in-memory/newick-file artifact that could get
+  ## silently mismatched with this specific VCF later.
+  stopifnot(inherits(tree, "phylo"))
 
   ## Default: declare a ##contig line for every CHROM actually present, sized
   ## from the same reference genome sample_mutation_loci() draws loci from.
@@ -336,7 +612,8 @@ write_vcf_df <- function(vcf_df, file,
 
   meta <- c(
     "##fileformat=VCFv4.2",
-    sprintf("##source=%s", source)
+    sprintf("##source=%s", source),
+    sprintf("##tree=%s", ape::write.tree(tree))
   )
 
   if (!is.null(contig_lengths)) {
@@ -348,6 +625,8 @@ write_vcf_df <- function(vcf_df, file,
     '##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele">',
     '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency, for each ALT allele">',
     '##INFO=<ID=EDGE,Number=1,Type=Integer,Description="Tree edge on which the mutation arose">',
+    '##INFO=<ID=DRIVER,Number=1,Type=Integer,Description="1 if mutation is a driver, 0 otherwise">',
+    '##INFO=<ID=S,Number=1,Type=Float,Description="Selection coefficient (fitness); 0 for neutral/passenger mutations">',
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
     '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
     '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles">',
