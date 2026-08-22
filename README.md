@@ -11,7 +11,7 @@
   - [4. Rulegraph](#4-rulegraph)
  
 ## 1. About
-![Example SCM summaries](./docs/figs/scm_summary.png)
+![Example SCM summaries](./docs/scm_summary.png)
 
 Github repository containing the code to apply [stochastic character mapping](https://pmc.ncbi.nlm.nih.gov/articles/PMC1403802/) (SCM) to somatic single-nucleotide variants (SNVs). The Snakemake workflow here is specifically designed to accommodate single-cell stratified data comparable to those generated for, e.g., [isogenic hematopoietic clones](https://www.nature.com/articles/s41586-022-04786-y) or [single-cell whole genome-sequencing data](https://www.biorxiv.org/content/10.1101/2025.10.11.681805v1). This approach is part of a larger study that aims to investigate the frequency, predictors, and consequences of somatic mutations that evolve in violation of the infinite sites model of evolution.
 
@@ -49,7 +49,6 @@ somatic_mutation_scm/
 ├── LICENSE                        # License for the repository
 ├── README.md                      # This file
 ├── docs/                          # Documentation and notebooks related to code/theory development and testing
-│   ├── figs/                      # Figures for the documentation
 │   └── notebooks/                 # Jupyter/Rmd notebooks for development, testing, validation
 └── smk/                           # Snakemake workflow for applying stochastic character mapping to somatic SNVs
     ├── config/                    # Configuration files for the Snakemake workflow
