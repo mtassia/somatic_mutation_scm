@@ -4,7 +4,7 @@ library(ggtree)
 library(tidyverse)
 library(rsimpop)
 library(truncdist)
-library(BSgenome.Hsapiens.UCSC.hg38)  
+library(BSgenome.Hsapiens.UCSC.hg38)
 library(GenomicRanges)
 library(rtracklayer)
 library(TreeDist)
@@ -18,9 +18,8 @@ genGammaFitness <- function(shape = 0.47, rate = 34, seed = NULL) {
   function() rgamma(n = 1, shape = shape, rate = rate)
 }
 
-
 # Generate n random hex hash strings (nchar characters each), for use as
-# opaque per-mutation IDs. At nchar = 12 the collision probability is 
+# opaque per-mutation IDs. At nchar = 12 the collision probability is
 # negligible for any realistic number of mutations.
 random_hash <- function(n, nchar = 12) {
   hex <- c(0:9, letters[1:6])
@@ -29,8 +28,8 @@ random_hash <- function(n, nchar = 12) {
 
 # Combine a driver-event table (as in simpop$events -- node/timing) and a
 # driver->fitness lookup (as in simpop$cfg$drivers) into a single data
-# frame. Returns NULL if either input is NULL (e.g. a tree that didn't 
-# originate from run_driver_process_sim()). Called once by get_phylo_object() 
+# frame. Returns NULL if either input is NULL (e.g. a tree that didn't
+# originate from run_driver_process_sim()). Called once by get_phylo_object()
 # and stashed as tree$driver_info.
 get_driver_info <- function(events, driver_fitness) {
   if (is.null(events) || is.null(driver_fitness)) return(NULL)
@@ -44,8 +43,8 @@ get_driver_info <- function(events, driver_fitness) {
   drivers[, c("driver_id", "fitness", "node", "mutation_id")]
 }
 
-# Create a phylo object from rsimpop output. 
-get_phylo_object <- function(simpop){
+# Create a phylo object from rsimpop output.
+get_phylo_object <- function(simpop) {
   tr <- list()
   tr$edge.length <- simpop$edge.length
   tr$edge <- simpop$edge
@@ -56,20 +55,20 @@ get_phylo_object <- function(simpop){
 
   tr$driver_info <- get_driver_info(simpop$events, simpop$cfg$drivers)
 
-  return(tr)
+  tr
 }
 
 # Get the node descendant of an edge
 get_edge_descendant <- function(phylo, edge_index) {
   edge <- phylo$edge[edge_index, ]
-  return(edge[2])
+  edge[2]
 }
 
 # Get all tips descendant from a node
 get_tips_from_node <- function(phylo, node) {
   descendants <- getDescendants(phylo, node)
   tips <- descendants[descendants <= length(phylo$tip.label)]
-  return(tips)
+  tips
 }
 
 # Map every edge in a tree to a canonical string key identifying its
@@ -166,14 +165,18 @@ read_assigned_edges <- function(h5f_path) {
 }
 
 # Compare SCM's inferred mutation-to-edge assignment (multi_scm() h5 output,
-# via read_assigned_edges()) against the ground-truth edge each mutation was
-# actually emitted on during simulation (the EDGE= INFO tag in the VCF
-# written by build_vcf_df()).
+# via read_assigned_edges()) against the ground-truth edge(s) each mutation
+# was actually emitted on during simulation (the EDGE= INFO tag in the VCF
+# written by build_vcf_df()). A locus can have more than one true origin --
+# EDGE holds a comma-separated list whenever introduce_ism_violations() has
+# merged independent mutations into that locus -- so ground truth here is a
+# *set* of edges, not a single one.
 #
 # ARGUMENTS:
 #   - vcf_df:
 #       data.frame from build_vcf_df()/write_vcf_df(), with the ground-truth
-#       edge in INFO as "EDGE=<n>", indexed against `sim_tree`
+#       edge(s) in INFO as "EDGE=<n>" or "EDGE=<n1>,<n2>,...", indexed
+#       against `sim_tree`
 #   - h5f_path:
 #       Path to the h5 file written by multi_scm()
 #   - sim_tree:
@@ -184,21 +187,39 @@ read_assigned_edges <- function(h5f_path) {
 #       after chromosome_scm.R's rooting/ladderizing)
 #
 # RETURNS: data.frame, one row per locus present in both vcf_df and the h5
-# file's assigned_edges group(s), with the ground-truth edge translated into
-# scm_tree's numbering, the edge(s) SCM actually assigned, a `correct` flag
-# (TRUE only when SCM assigned exactly one edge and it matches), and
-# `edge_distance` -- the edge-count distance (see edge_distance()) between
-# the true edge and the nearest edge SCM actually assigned, for grading
-# near-misses rather than just right/wrong. NA when there's a topology
-# mismatch or SCM assigned zero edges (nothing to measure distance to).
+# file's assigned_edges group(s), with:
+#   - truth_edge_sim_numbering / truth_edge_scm_numbering: comma-joined list
+#     of the true origin edge(s), in sim_tree's and scm_tree's numbering
+#     respectively (translated one at a time via translate_edge_index(); an
+#     origin that has no counterpart in scm_tree's topology shows as NA
+#     within the list rather than being silently dropped)
+#   - scm_assigned_edges: the edge(s) SCM actually assigned
+#   - correct: TRUE only when SCM assigned exactly one edge and it matches
+#     ANY of the true origins (SCM works from a single observed presence
+#     pattern -- the union across however many independent origins produced
+#     it -- so it can at best identify one of them, not "these two edges
+#     independently")
+#   - edge_distance: the edge-count distance (see edge_distance()) between
+#     the edge SCM actually assigned and the *nearest* true origin, for
+#     grading near-misses rather than just right/wrong
+#   - topology_mismatch: TRUE only if NONE of the true origins translate
+#     into scm_tree's numbering (if at least one does, comparison still
+#     proceeds against that subset)
+# `edge_distance`/`correct` are NA/FALSE when there's a full topology
+# mismatch or SCM assigned zero edges (nothing to measure against).
 compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1) {
 
   sim_keys <- edge_bipartitions(sim_tree)
   scm_keys <- edge_bipartitions(scm_tree)
   scm_node_dist <- node_edge_distances(scm_tree)
 
-  locus      <- paste(vcf_df$CHROM, vcf_df$POS, sep = "_")
-  truth_edge <- as.integer(sub(".*EDGE=(\\d+).*", "\\1", vcf_df$INFO))
+  locus <- paste(vcf_df$CHROM, vcf_df$POS, sep = "_")
+  ## EDGE= holds one or more comma-separated origins (see
+  ## introduce_ism_violations()) -- capture the whole digit+comma run, not
+  ## just the first number, then split per locus into a list of integer
+  ## vectors.
+  truth_edge_str <- sub(".*EDGE=([0-9,]+).*", "\\1", vcf_df$INFO)
+  truth_edges    <- strsplit(truth_edge_str, ",")
 
   assigned <- read_assigned_edges(h5f_path)
   if (nrow(assigned) == 0) return(data.frame())
@@ -210,28 +231,30 @@ compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1) {
   }
 
   mclapply(shared, function(loc) {
-    truth_idx     <- truth_edge[match(loc, locus)]
-    truth_scm_idx <- translate_edge_index(truth_idx, sim_keys, scm_keys)
+    truth_idx <- as.integer(truth_edges[[match(loc, locus)]])
+    truth_scm_idx <- vapply(truth_idx, translate_edge_index, integer(1),
+                            from_keys = sim_keys, to_keys = scm_keys)
+    truth_scm_valid <- truth_scm_idx[!is.na(truth_scm_idx)]
 
     scm_str <- assigned$scm_assigned_edges[assigned$locus == loc]
     scm_idx <- if (nzchar(scm_str)) as.integer(strsplit(scm_str, ",")[[1]]) else integer(0)
 
-    edge_dist <- if (is.na(truth_scm_idx) || length(scm_idx) == 0) {
+    edge_dist <- if (length(truth_scm_valid) == 0 || length(scm_idx) == 0) {
       NA_integer_
     } else {
-      min(vapply(scm_idx, function(e) edge_distance(truth_scm_idx, e, scm_tree, scm_node_dist),
-                 numeric(1)))
+      min(vapply(scm_idx, function(e) {
+        min(vapply(truth_scm_valid, function(t) edge_distance(t, e, scm_tree, scm_node_dist),
+                   numeric(1)))
+      }, numeric(1)))
     }
 
     data.frame(
       locus                    = loc,
-      truth_edge_sim_numbering = truth_idx,
-      truth_edge_scm_numbering = truth_scm_idx,
+      truth_edge_sim_numbering = paste(truth_idx, collapse = ","),
+      truth_edge_scm_numbering = paste(truth_scm_idx, collapse = ","),
       scm_assigned_edges       = paste(scm_idx, collapse = ","),
-      topology_mismatch        = is.na(truth_scm_idx),
-      correct                  = !is.na(truth_scm_idx) &&
-                                  length(scm_idx) == 1 &&
-                                  truth_scm_idx == scm_idx,
+      topology_mismatch        = length(truth_scm_valid) == 0,
+      correct                  = length(scm_idx) == 1 && scm_idx %in% truth_scm_valid,
       edge_distance            = edge_dist,
       stringsAsFactors = FALSE
     )
@@ -243,7 +266,7 @@ create_mut_vector <- function(phylo, node) {
   tips <- get_tips_from_node(phylo, node)
   mut_vector <- rep(0, length(phylo$tip.label))
   mut_vector[tips] <- 1
-  return(mut_vector)
+  mut_vector
 }
 
 # Per-mutation metadata columns create_mut_df() adds alongside "edge" and the
@@ -251,7 +274,8 @@ create_mut_vector <- function(phylo, node) {
 # data frame as a plain (edge + samples) matrix -- e.g. simulate_DP_and_AD(),
 # build_vcf_df() -- must strip *all* of these, not just "edge", to correctly
 # identify which columns are genuine sample genotypes.
-MUT_META_COLS <- c("edge", "mutation_id", "is_driver", "selection_coefficient")
+MUT_META_COLS <- c("edge", "mutation_id", "is_driver", "selection_coefficient", "is_ism_violation",
+                   "n_origins", "origin_mutation_ids")
 
 # function to create a data frame of mutation presence.
 # `driver_info` defaults to tree$driver_info -- set once, by
@@ -311,12 +335,152 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
 
   colnames(mat) <- c("edge",tree$tip.label)
   mat <- as.data.frame(mat)
+  ## `edge` is character, not numeric, from the start -- one comma-separated
+  ## list of tree-edge indices per mutation. Every mutation begins with
+  ## exactly one origin (e.g. "12"), but introduce_ism_violations() can merge
+  ## several rows into one whose edge holds all of their origins (e.g.
+  ## "12,47"). Keeping the type consistent regardless of whether violations
+  ## are ever introduced avoids create_mut_df()'s output silently changing
+  ## type downstream depending on what happens to it later.
+  mat$edge <- as.character(mat$edge)
   mat <- mat %>%
     mutate(mutation_id = mutation_id,
            is_driver = is_driver,
            selection_coefficient = selection_coefficient,
+           ## Locus assignment (and therefore whether two mutations actually
+           ## collide at the same site) doesn't happen until
+           ## sample_mutation_loci() runs, well after create_mut_df() -- this
+           ## is a placeholder every mutation starts as FALSE, for whatever
+           ## later step introduces/detects ISM violations to update.
+           is_ism_violation = FALSE,
+           ## Number of independent origins of this mutation. Every mutation
+           ## starts as a single, unique origin (1); a later ISM-violation
+           ## step would bump this (and set is_ism_violation = TRUE) for
+           ## loci where multiple independent origins are introduced.
+           n_origins = 1L,
            .before = 1)
-  return(mat)
+  mat
+}
+
+# Introduce infinite-sites-model (ISM) violations into a create_mut_df()
+# output by merging groups of otherwise-independent mutation rows into a
+# single shared-locus record -- modeling recurrent/parallel mutation at the
+# same genomic site (n independent tree branches all landing on what will
+# become, once sample_mutation_loci() runs, the same genomic coordinate).
+#
+# ARGUMENTS:
+#   - mut_df:
+#       data.frame from create_mut_df()
+#   - violation_spec:
+#       data.frame with columns `n_origins` (rows to merge per violation,
+#       each >= 2) and `count` (how many such violations to introduce at
+#       that n_origins)
+#   - seed:
+#       optional RNG seed for reproducible selection
+#   - sel_coef_tol:
+#       numeric tolerance for treating two drivers' selection coefficients
+#       as the same underlying driver effect (see MERGE SEMANTICS)
+#
+# MERGE SEMANTICS:
+#   For each violation, n_origins rows are drawn uniformly at random --
+#   without replacement, and never reusing a row already claimed by an
+#   earlier violation in this same call -- and collapsed into a single row:
+#     - sample columns: logical OR (union) of the merged rows' presence
+#       patterns. The site is "mutated" in a sample if ANY of the
+#       independent origins is ancestral to it.
+#     - n_origins: set to the number of rows merged; is_ism_violation: TRUE.
+#     - is_driver / selection_coefficient: TRUE / that coefficient if any
+#       merged row was a driver, otherwise FALSE / NA. If a driver is drawn
+#       into a candidate merge set, the draw is rejected and retried unless
+#       every OTHER driver in the set shares (within sel_coef_tol) the same
+#       selection_coefficient -- merging two independent drivers with
+#       *different* fitness effects into one locus would be biologically
+#       incoherent (one site can't have two different selective effects on
+#       different branches of the same tree).
+#     - mutation_id: kept from the driver row if the merge includes one --
+#       this has to hold, since tree$driver_info$mutation_id (see
+#       get_driver_info()) is the upstream source of truth for a driver's
+#       id, and downstream code assumes create_mut_df()'s driver rows match
+#       it. Otherwise (no driver involved) a fresh random_hash(), since
+#       there's no principled reason to prefer any one of the merged
+#       passenger mutation_ids over the others.
+#     - edge: becomes the comma-joined union of all n merged rows' edges
+#       (e.g. "12,47") -- create_mut_df() already makes `edge` character for
+#       exactly this reason (see create_mut_df()), so no separate
+#       origin_edges bookkeeping column is needed; `edge` itself is always
+#       "one or more comma-separated tree-edge indices", whether or not any
+#       violation ever touched that row. Downstream consumers (build_vcf_df(),
+#       write_vcf_df(), compare_scm_edges()) are updated to expect that.
+#       origin_mutation_ids preserves the full set of original mutation_ids
+#       the same way, since mutation_id itself stays single-valued.
+#
+# RETURNS: a create_mut_df()-shaped data.frame, with an origin_mutation_ids
+# column added, and sum(violation_spec$count * (violation_spec$n_origins - 1))
+# fewer rows than the input.
+introduce_ism_violations <- function(mut_df, violation_spec, seed = NULL, sel_coef_tol = 1e-8) {
+  if (!is.null(seed)) set.seed(seed)
+  stopifnot(all(c("n_origins", "count") %in% colnames(violation_spec)))
+  stopifnot(all(violation_spec$n_origins >= 2), all(violation_spec$count >= 1))
+
+  n_needed <- sum(violation_spec$n_origins * violation_spec$count)
+  if (n_needed > nrow(mut_df)) {
+    stop(sprintf("violation_spec requires merging %d rows but mut_df only has %d.",
+                 n_needed, nrow(mut_df)))
+  }
+
+  sample_cols <- setdiff(colnames(mut_df), MUT_META_COLS)
+
+  mut_df$origin_mutation_ids <- mut_df$mutation_id
+
+  used <- logical(nrow(mut_df))
+  merged_rows <- list()
+
+  spec_seq <- rep(seq_len(nrow(violation_spec)), violation_spec$count)
+
+  for (k in spec_seq) {
+    n <- violation_spec$n_origins[k]
+    available <- which(!used)
+    if (length(available) < n) {
+      stop("Ran out of unused mutation records while introducing ISM violations.")
+    }
+
+    ## Reject-and-redraw: draw n rows uniformly at random, accept only if
+    ## every driver among them shares the same selection_coefficient.
+    max_tries <- 1000
+    picked <- NULL
+    for (attempt in seq_len(max_tries)) {
+      candidate_idx <- sample(available, n)
+      driver_coefs <- mut_df$selection_coefficient[candidate_idx][mut_df$is_driver[candidate_idx]]
+      if (length(driver_coefs) <= 1 || diff(range(driver_coefs)) < sel_coef_tol) {
+        picked <- candidate_idx
+        break
+      }
+    }
+    if (is.null(picked)) {
+      stop("Could not find ", n, " mutation records with a consistent driver ",
+           "selection coefficient after ", max_tries, " attempts.")
+    }
+
+    rows <- mut_df[picked, , drop = FALSE]
+    is_driver_merge <- any(rows$is_driver)
+    driver_row <- if (is_driver_merge) rows[which(rows$is_driver)[1], ] else NULL
+
+    merged <- rows[1, , drop = FALSE]
+    merged[sample_cols] <- as.integer(colSums(rows[sample_cols]) > 0)
+    merged$n_origins <- n
+    merged$is_ism_violation <- TRUE
+    merged$is_driver <- is_driver_merge
+    merged$selection_coefficient <- if (is_driver_merge) driver_row$selection_coefficient else NA_real_
+    merged$mutation_id <- if (is_driver_merge) driver_row$mutation_id else random_hash(1)
+    merged$edge <- paste(rows$edge, collapse = ",")
+    merged$origin_mutation_ids <- paste(rows$origin_mutation_ids, collapse = ",")
+
+    merged_rows[[length(merged_rows) + 1]] <- merged
+    used[picked] <- TRUE
+  }
+
+  survivors <- mut_df[!used, , drop = FALSE]
+  dplyr::bind_rows(survivors, merged_rows)
 }
 
 simulate_DP_and_AD <- function(   G,                     # output from `create_mut_df` (mutation presence matrix)
@@ -336,17 +500,17 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
   if (!is.null(seed)) set.seed(seed)
 
   G <- G[, !colnames(G) %in% MUT_META_COLS, drop = FALSE]  # keep only sample columns
-  
+
   n_mut  <- nrow(G)    # number of mutation/site rows in the ground-truth genotype matrix
   n_samp <- ncol(G)    # number of sample/tip columns
-  
+
   ## --- Depth model, truncated to the post-QC regime ------------------------
   ## Rationale: rather than simulating depth freely and then filtering out
   ## sites/samples that fail QC (which would require discarding rows/columns
   ## after the fact), we draw directly from the region of parameter space
   ## that WOULD survive filtering. This reflects the assumption that this
   ## matrix represents already-QC-passed data.
-  
+
   ## site_factor: multiplicative per-site coverage bias (e.g. GC content,
   ## mappability, replication timing). Truncated so that site_factor * D_bar
   ## stays within [min_cov, max_cov]. This guarantees every simulated site would
@@ -356,28 +520,28 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
                         b = max_cov / D_bar,   # upper truncation point
                         meanlog = 0,           # median multiplier = 1 (no systematic bias)
                         sdlog = site_sdlog)    # controls how much sites vary in coverage
-  
+
   ## sample_factor: multiplicative per-sample depth effect. Only lower-truncated,
-  ## as a well-sequenced sample isn't penalized. A sample whose mean depth would 
+  ## as a well-sequenced sample isn't penalized. A sample whose mean depth would
   ## fall below min_cov is excluded.
   sample_factor <- rtrunc(n_samp, "lnorm",
                           a = min_cov / D_bar,
                           b = Inf,
                           meanlog = 0,
                           sdlog = sample_sdlog)
-  
+
   ## Expected depth per (site, sample) cell = D_bar scaled by both the site's
   ## and the sample's multiplicative factors.
   mu <- outer(site_factor, sample_factor) * D_bar
-  
+
   ## Realized depth drawn from a negative binomial (overdispersed relative to
-  ## Poisson). 
+  ## Poisson).
   DP <- matrix(rnbinom(n_mut * n_samp,
                        mu = mu,
                        size = theta),
                nrow = n_mut)
   colnames(DP) <- colnames(G)
-  
+
   ## --- Site-level beta-binomial concentration, truncated to snv_rho <= rho_max
   ## Rationale: real heterozygous-site VAFs aren't a clean binomial(0.5) draw
   ## -- there's locus-specific overdispersion (mapping issues, local sequence
@@ -392,18 +556,18 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
                        b = Inf,
                        shape = site_conc_shape,
                        rate = site_conc_rate)
-  site_rho   <- 1 / (1 + site_conc)   # sanity check: max(site_rho) should be <= rho_max
-  
-  ## dropout: models complete allelic dropout at truly heterozygous sites 
+  site_rho   <- 1 / (1 + site_conc)   # sanity check: max(site_rho) should be <= rho_max. NOTE: value unused
+
+  ## dropout: models complete allelic dropout at truly heterozygous sites
   is_het  <- G == 1   # TRUE where the ground-truth genotype is heterozygous (mutation present)
   dropout <- is_het & matrix(runif(n_mut * n_samp) < dropout_rate, n_mut, n_samp)
-  
+
   ## At true hom-ref sites (not heterozygous), alt reads arise only from
   ## sequencing/mapping error -- binomial draw at the error rate.
   AD <- matrix(0L, n_mut, n_samp)   # alt-read-count matrix, same shape as DP/G
   colnames(AD) <- colnames(G)
   AD[!is_het] <- rbinom(sum(!is_het), DP[!is_het], error_rate)
-  
+
   ## At true het sites WITHOUT dropout: alt-read count is a beta-binomial
   ## draw. The beta distribution's shape parameters (conc*0.5, conc*0.5) are
   ## symmetric around VAF = 0.5 (expected for a true heterozygous variant),
@@ -411,15 +575,15 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
   ## versus how much it's allowed to drift due to locus-specific noise.
   het_ok   <- is_het & !dropout
   conc_mat <- matrix(site_conc, n_mut, n_samp)[het_ok]   # broadcast site_conc across samples, then subset
-  p_vaf    <- rbeta(sum(het_ok), conc_mat * 0.5, conc_mat * 0.5)
+  p_vaf    <- rbeta(sum(het_ok), conc_mat * 0.5, conc_mat * 0.5) 
   AD[het_ok] <- rbinom(sum(het_ok), DP[het_ok], p_vaf)
-  
+
   ## At true het sites WITH dropout: no true alt signal is observable, so
   ## alt reads arise only from background error, same as a hom-ref site --
   ## this is what makes dropout "invisible" to a caller (the site looks
   ## exactly like hom-ref, not like a low-confidence het call).
   AD[is_het & dropout] <- rbinom(sum(is_het & dropout), DP[is_het & dropout], error_rate)
-  
+
   ## Return everything needed downstream (DP/AD for VCF construction) plus
   ## the intermediate quantities (useful for diagnostics/sanity checks, e.g.
   ## confirming max(site_rho) <= rho_max, or inspecting which sites/samples
@@ -428,30 +592,30 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
        site_conc = site_conc, site_rho = site_rho, dropout = dropout)
 }
 
-## --- GQ/PL/GT from DP, AD (vectorized over full mutation x sample matrices) ---
+# GQ/PL/GT from DP, AD (vectorized over full mutation x sample matrices)
 simulate_GQ_PL_GT <- function(DP, AD, error_rate = 0) {
   p_hom_ref <- error_rate
   p_het     <- 0.5
   p_hom_alt <- 1 - error_rate
-  
+
   n_mut  <- nrow(DP)
   n_samp <- ncol(DP)
-  
+
   ## log10 genotype likelihoods (still needed internally to derive PL/GQ,
   ## not returned directly)
   ll <- function(p) dbinom(AD, DP, p, log = TRUE) / log(10)
   GL0 <- ll(p_hom_ref)   # 0/0
   GL1 <- ll(p_het)       # 0/1
   GL2 <- ll(p_hom_alt)   # 1/1
-  
+
   ## PL: phred-scaled, normalized so the best genotype = 0, capped at 255
   m   <- pmax(GL0, GL1, GL2)
   PL0 <- pmin(round(-10 * (GL0 - m)), 255)
   PL1 <- pmin(round(-10 * (GL1 - m)), 255)
   PL2 <- pmin(round(-10 * (GL2 - m)), 255)
-  
+
   ## GQ: GATK-style genotype quality = difference between the best PL (0)
-  ## and the second-best PL, capped at 99. 
+  ## and the second-best PL, capped at 99.
   GQ <- pmin(PL0 + PL1 + PL2 - pmax(PL0, PL1, PL2) - pmin(PL0, PL1, PL2), 99)
 
   ## called GT = argmin PL per site/sample. Vectorized in place of
@@ -460,11 +624,11 @@ simulate_GQ_PL_GT <- function(DP, AD, error_rate = 0) {
   GT_idx <- ifelse(PL0 <= PL1 & PL0 <= PL2, 1L, ifelse(PL1 <= PL2, 2L, 3L))
   GT_str <- matrix(c("0/0", "0/1", "1/1")[GT_idx], n_mut, n_samp)
   colnames(GT_str) <- colnames(PL0)
-  
+
   list(GQ = GQ, PL0 = PL0, PL1 = PL1, PL2 = PL2, GT = GT_str)
 }
 
-## --- Sample mutation genomic loci (locus, ref, alt) ------------------------
+# Sample mutation genomic loci (locus, ref, alt)
 sample_mutation_loci <- function(n,
                                  genome_pkg = "BSgenome.Hsapiens.UCSC.hg38",
                                  chroms     = paste0("chr", c(1:22, "X")),
@@ -477,7 +641,7 @@ sample_mutation_loci <- function(n,
   library(genome_pkg, character.only = TRUE)
   genome     <- get(genome_pkg)
   chrom_lens <- seqlengths(genome)[chroms]
-  
+
   ## internal recursive core -- genome/chroms/chrom_lens computed once above,
   ## then just threaded through recursive top-up calls (rare, only fires if
   ## an N/gap region is hit, or a locus collides with one already drawn --
@@ -513,22 +677,22 @@ sample_mutation_loci <- function(n,
       pos_out   <- pos_draw[idx]
       ref_out   <- ref[idx]
     }
-    
+
     ## vectorized ALT assignment via lookup table (no per-row sample())
     bases    <- c("A", "C", "G", "T")
     alt_opts <- sapply(bases, function(b) setdiff(bases, b))  # 3 x 4 matrix, columns named by ref base
     alt_out  <- alt_opts[cbind(sample.int(3, n, replace = TRUE),
                                match(ref_out, bases))]
-    
+
     data.frame(chrom = chrom_out, pos = pos_out, ref = ref_out, alt = alt_out,
                stringsAsFactors = FALSE)
   }
-  
+
   .sample_core(n)
 }
 
-## Make VCF like structure
-build_vcf_df <- function(G, DP, AD, gl, edges,
+# Make VCF like structure.
+build_vcf_df <- function(G, DP, AD, gl, edges, mut_table,
                          id = ".", filter = "PASS") {
 
   ## Pull per-mutation metadata off G (see create_mut_df()) before it gets
@@ -542,11 +706,13 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
   } else {
     NA_real_
   }
+  is_ism_violation <- if ("is_ism_violation" %in% colnames(G)) G$is_ism_violation else FALSE
+  n_origins <- if ("n_origins" %in% colnames(G)) G$n_origins else 1L
 
   G <- G[, !colnames(G) %in% MUT_META_COLS, drop = FALSE]  # keep only sample columns
 
   sample_names <- colnames(G)
-  
+
   n_mut  <- nrow(mut_table)
   n_samp <- ncol(gl$GT)
   stopifnot(nrow(DP) == n_mut, nrow(AD) == n_mut,
@@ -568,6 +734,7 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
   AF <- AC / (2 * n_samp)
   driver_flag <- as.integer(is_driver)
   sel_coef_out <- ifelse(is_driver, selection_coefficient, 0)
+  ism_viol_flag <- as.integer(is_ism_violation)
 
   vcf_df <- data.frame(
     CHROM  = mut_table$chrom,
@@ -577,8 +744,8 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
     ALT    = mut_table$alt,
     QUAL   = ".",
     FILTER = filter,
-    INFO   = sprintf("AC=%d;AF=%.6g;EDGE=%d;DRIVER=%d;S=%.6g",
-                     AC, AF, edges, driver_flag, sel_coef_out),
+    INFO   = sprintf("AC=%d;AF=%.6g;EDGE=%s;DRIVER=%d;S=%.6g;ISM_VIOL=%d;N_ORIGINS=%d",
+                     AC, AF, edges, driver_flag, sel_coef_out, ism_viol_flag, n_origins),
     FORMAT = "GT:DP:AD:GQ:PL",
     stringsAsFactors = FALSE
   )
@@ -586,7 +753,7 @@ build_vcf_df <- function(G, DP, AD, gl, edges,
   cbind(vcf_df, as.data.frame(fmt_mat, stringsAsFactors = FALSE))
 }
 
-## Write a build_vcf_df() data frame out to a VCF v4.2 file
+# Write a build_vcf_df() data frame out to a VCF v4.2 file
 write_vcf_df <- function(vcf_df, file, tree,
                          chrom_order = paste0("chr", c(1:22, "X")),
                          contig_lengths = "auto",
@@ -624,9 +791,11 @@ write_vcf_df <- function(vcf_df, file, tree,
   meta <- c(meta,
     '##INFO=<ID=AC,Number=A,Type=Integer,Description="Allele count in genotypes, for each ALT allele">',
     '##INFO=<ID=AF,Number=A,Type=Float,Description="Allele frequency, for each ALT allele">',
-    '##INFO=<ID=EDGE,Number=1,Type=Integer,Description="Tree edge on which the mutation arose">',
+    '##INFO=<ID=EDGE,Number=.,Type=Integer,Description="Tree edge(s) on which the mutation arose; more than one indicates an ISM-violating recurrent mutation">',
     '##INFO=<ID=DRIVER,Number=1,Type=Integer,Description="1 if mutation is a driver, 0 otherwise">',
     '##INFO=<ID=S,Number=1,Type=Float,Description="Selection coefficient (fitness); 0 for neutral/passenger mutations">',
+    '##INFO=<ID=ISM_VIOL,Number=1,Type=Integer,Description="1 if locus is an infinite-sites-model violation, 0 otherwise">',
+    '##INFO=<ID=N_ORIGINS,Number=1,Type=Integer,Description="Number of independent origins of this mutation; 1 unless it is a recurrent/ISM-violating site">',
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">',
     '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
     '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles">',
@@ -649,10 +818,10 @@ write_vcf_df <- function(vcf_df, file, tree,
   invisible(file)
 }
 
-## Rescale a phylo object's branch lengths from raw mutation counts (as held
-## by tr <- get_phylo_object(st_mut) %>% drop.tip("s1")) into a molecular
-## phylogeny with branch lengths in substitutions/site. NOTE: The genome 
-## accessibility mask here is assumed to be the "good sites"
+# Rescale a phylo object's branch lengths from raw mutation counts (as held
+# by tr <- get_phylo_object(st_mut) %>% drop.tip("s1")) into a molecular
+# phylogeny with branch lengths in substitutions/site. NOTE: The genome
+# accessibility mask here is assumed to be the "good sites"
 scale_branches_to_subs_per_site <- function(tr, mask,
                                             mask_chroms = paste0("chr", c(1:22, "X"))) {
 
@@ -679,3 +848,8 @@ scale_branches_to_subs_per_site <- function(tr, mask,
   tr
 }
 
+# Function estimates the count of expected ISM violations given a 
+# phylogenies total branch length (measured in mutations).
+estimate_ism_violations <- function(phylo, L = 3.2e9) {
+  ceiling((sum(phylo$edge.length)^2)/(2*L))
+}

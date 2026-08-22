@@ -6,3 +6,4 @@ test_sim/
 *.Rproj
 *.aux
 *.tex
+*.log

@@ -15,7 +15,7 @@
 
 Github repository containing the code to apply [stochastic character mapping](https://pmc.ncbi.nlm.nih.gov/articles/PMC1403802/) (SCM) to somatic single-nucleotide variants (SNVs). The Snakemake workflow here is specifically designed to accommodate single-cell stratified data comparable to those generated for, e.g., [isogenic hematopoietic clones](https://www.nature.com/articles/s41586-022-04786-y) or [single-cell whole genome-sequencing data](https://www.biorxiv.org/content/10.1101/2025.10.11.681805v1). This approach is part of a larger study that aims to investigate the frequency, predictors, and consequences of somatic mutations that evolve in violation of the infinite sites model of evolution.
 
-An early implementation of the SCM to model the evolutionary history of an arbitraty somatic variant is presented in the [`shortTL_hematopoiesis` github repository](https://github.com/mccoy-lab/shortTL_hematopoiesis), available [here](https://github.com/mccoy-lab/shortTL_hematopoiesis/blob/7a80540af4304d2ec6e2e0cae5bc4c360b12f6c3/analyses/3_stochastic_character_mapping/scm.pdf).
+An early implementation of the SCM to model the evolutionary history of an arbitraty somatic variant is presented in the [`shortTL_hematopoiesis` github repository](https://github.com/mccoy-lab/shortTL_hematopoiesis), and a notebook detailing the core functions is available [here](https://github.com/mccoy-lab/shortTL_hematopoiesis/blob/7a80540af4304d2ec6e2e0cae5bc4c360b12f6c3/analyses/3_stochastic_character_mapping/scm.pdf).
 
 The implementation of SCM in this workflow leverages the [`phytools` comparative phylogenetics toolkit](https://doi.org/10.7717/peerj.16505), and SCM summaries are stored as [HDF5 files](https://support.hdfgroup.org/documentation/hdf5/latest/_intro_h_d_f5.html) which can accommodate the variation in data size and structure across SCM summary stats.
 
@@ -50,7 +50,7 @@ somatic_mutation_scm/
 ├── README.md                      # This file
 ├── docs/                          # Documentation and notebooks related to code/theory development and testing
 │   ├── figs/                      # Figures for the documentation
-│   └── notebooks/                 # Jupyter notebooks for code/theory development and testing
+│   └── notebooks/                 # Jupyter/Rmd notebooks for development, testing, validation
 └── smk/                           # Snakemake workflow for applying stochastic character mapping to somatic SNVs
     ├── config/                    # Configuration files for the Snakemake workflow
     ├── example_data/              # Example input files for testing purposes
