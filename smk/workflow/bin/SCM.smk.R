@@ -1,3 +1,10 @@
+#* SCM.smk.R
+#* Functions for running stochastic character mapping (SCM) on a VCF
+#* of somatic variants: build genotype-state priors from a VCF, build
+#* a GT10 substitution matrix from a CellPhy bestModel file, run SCM
+#* per SNP locus, and persist/merge/summarise results in an HDF5
+#* (h5f) store.
+
 ####* INSTALL/LOAD LIBRARIES *####
 cran_packages <- c("BiocManager", "tidyverse", "data.table",
                    "pbapply", "pbmcapply", "vcfR",
@@ -20,7 +27,10 @@ unphred <- function(phredscore) {
   # ARGUMENTS:
   #   - phredscore:
   #       integer vector; genotype likelihood (PL)
-  
+  # RETURN:
+  #       Numeric vector of normalized genotype probabilities (same
+  #       length as phredscore)
+
   prob <- 10^(-phredscore / 10)
   prob_norm <- prob / sum(prob)
   return(prob_norm)
@@ -36,7 +46,13 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   #   - mat_list:
   #       Boolean; specify whether output is a named list of datatables
   #       per variant locus (TRUE) or a single long datatable
-  
+  # RETURN:
+  #       If mat_list = TRUE: a named list of data.tables (one per SNP
+  #       locus, named "<CHROM>_<POS>") of genotype-state priors, one
+  #       row per sample.
+  #       If mat_list = FALSE: a single long data.table of genotype-
+  #       state priors for all SNP loci.
+
   # Read VCF with vcfR
   cat("Loading vcf data...\n")
   
@@ -173,7 +189,11 @@ read_cellphy_model <- function(bestModel_path) {
   #   - bestModel_path:
   #       bestModel text output from `cellphy` run with
   #       best-fit GT10 substitution model.
-  
+  # RETURN:
+  #       10x10 GT10 substitution rate matrix (Q), row/column-named by
+  #       genotype state, with the diagonal set such that each row
+  #       sums to 0.
+
   RateCats <- c("Zero", "AC", "AG", "AT", "CG", "CT", "GT")
   States <- c("AA", "CC", "GG", "TT", "AC", "AG", "AT", "CG", "CT", "GT")
   
@@ -365,7 +385,10 @@ singleton_lrt <- function(x, gt_state_list, pbopt = "DivideFFT") {
   #       compile_gt_states.snp(mat_list = T)
   #   - pbopt:
   #       String; method passed to dpbinom(); default = "DivideFFT"
-  
+  # RETURN:
+  #       Numeric; LRT p-value for the null hypothesis that the locus
+  #       is a singleton mutation.
+
   # Grab focal genotype-prior matrix from gt_state_list
   df <- tibble(gt_state_list[[x]]) %>%
     select_if(~ !is.numeric(.) || sum(.) != 0)
@@ -436,7 +459,10 @@ runSCM_single <- function(x, tree, gt_state_list,
   #       Number of cores to use for make.simmap()
   #   - quietly:
   #       Suppress stdout
-  
+  # RETURN:
+  #       multiSimmap object containing `reps` stochastic character
+  #       map replicates for locus x.
+
   # Report error if more than one locus string is supplied to x
   if (length(x) > 1){
     return(print("ERROR: >1 variant used for input"))
@@ -729,7 +755,10 @@ detect_state_changes <- function(tree_edges, states){
   #         3. tree_edges[n,] are edge indices
   #   - states:
   #       Consensus state in node order
-  
+  # RETURN:
+  #       Binary vector (same order as tree_edges) flagging edges on
+  #       which a genotype state change occurred.
+
   # If root state is NA, return 0's for all branches and exit
   if ( is.na(states[tree_edges[1, ][1]]) ){
     return(rep(0, nrow(tree_edges)))
@@ -763,6 +792,20 @@ detect_state_changes <- function(tree_edges, states){
   })
 } 
 
+####* H5 OUTPUT *####
+
+#* h5f file layout produced/consumed by the functions below:
+#*   - gt_posteriors/<locus>:        genotype state posteriors per node/tip
+#*   - assigned_edges/<locus>:       binary state-change vector (edge order)
+#*   - consensus_posteriors/<locus>: consensus-state posterior per node/tip
+#*   - hpd_counts/<locus>:           95% HPD character state transition counts
+#*   - summary/<locus>:              one-row run summary (see multi_scm)
+#*   - tree:                         input phylo, written via write.tree()
+#*   - reps:                         number of SCM replicates (scm_its)
+#*   - Q:                            substitution matrix used for the run
+#*   - scm_scaled_tree:              mutation-burden-scaled tree (see
+#*                                   add_scaled_tree_to_h5f)
+
 #* Create and write results from `summarise_scm.snp` to h5f file
 scm_to_h5f <- function(scm_summary, loc_str, h5f) {
   # ARGUMENTS:
@@ -772,7 +815,9 @@ scm_to_h5f <- function(scm_summary, loc_str, h5f) {
   #       String; name of locus for which SCM was run
   #   - h5f:
   #       Path to write h5f file
-  
+  # RETURN:
+  #       None; called for the side effect of writing to h5f.
+
   # Write SCM results to h5f
   h5write(obj = scm_summary$gt_posteriors,
           file = h5f,
@@ -797,7 +842,9 @@ simplified_scm_to_h5f <- function(assigned_edge_vector, loc_str, h5f) {
   #       String; name of locus for which SCM was run
   #   - h5f:
   #       Path to write h5f file
-  
+  # RETURN:
+  #       None; called for the side effect of writing to h5f.
+
   # Write SCM results to h5f
   h5write(obj = NA,
           file = h5f,
@@ -820,7 +867,10 @@ rm_locus_from_h5f <- function(loc_str, h5f) {
   #       String; name of locus for which SCM was run
   #   - h5f:
   #       Path to write h5f file
-  
+  # RETURN:
+  #       None; called for the side effect of removing loc_str from
+  #       h5f.
+
   # Remove locus from h5f at all levels present
   try(h5delete(h5f, paste0("/gt_posteriors/", loc_str)), silent = TRUE)
   try(h5delete(h5f, paste0("/assigned_edges/", loc_str)), silent = TRUE)
@@ -835,9 +885,12 @@ check_locus_in_h5f <- function(loc_str, h5f_group_df) {
   #   - loc_str:
   #       String; name of locus for which SCM was run
   #   - h5f_group_df:
-  #       h5f group df generated using the following function: 
+  #       h5f group df generated using the following function:
   #       h5ls("path/to/filename.h5", recursive = T) %>% filter(! group == "/")
-  
+  # RETURN:
+  #       Boolean; TRUE if loc_str is present in all 5 h5f groups, else
+  #       FALSE.
+
   # Check if locus is present in all levels of h5f
   if (nrow(h5f_group_df %>% filter(name == loc_str)) != 5) {
     return(FALSE)
@@ -851,7 +904,11 @@ check_h5f_entries <- function(h5f_path) {
   # ARGUMENTS:
   #   - h5f_path:
   #       Path to h5f file
-  
+  # RETURN:
+  #       Invisible boolean; TRUE if every locus is present in all
+  #       h5f groups, FALSE otherwise. Also prints a QC message to
+  #       stdout.
+
   # Create a dataframe with all groups in h5f
   df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
   
@@ -914,8 +971,11 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   #   - brute:
   #       Boolean; run SCM on all loci (default = TRUE), else only run on loci
   #       which fail singleton LRT test (p ≤ 0.05).
-  
-  
+  # RETURN:
+  #       None; results are written incrementally to h5f_path as a
+  #       side effect (see "H5 OUTPUT / PERSISTENCE" section above for
+  #       schema).
+
   ######## INPUT CHECK ########
   # If gt_state_list, chr_str, h5f_path, tree, or Q are missing, return error
   if (missing(gt_state_list)) {
@@ -1302,9 +1362,15 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
 #* Merge multiple h5f files into one; this output will have a group for each
 #* name in h5f_paths.
 merge_h5_files <- function(h5f_paths, new_h5_name){
-  # h5f_paths = named list of h5f paths; names used for grouping
-  # new_h5_name = name of new h5f file
-  
+  # ARGUMENTS:
+  #   - h5f_paths:
+  #       Named list of h5f paths; names are used as the top-level
+  #       group name for each file's contents in the merged h5f.
+  #   - new_h5_name:
+  #       String; path/name of the new, merged h5f file.
+  # RETURN:
+  #       None; called for the side effect of writing new_h5_name.
+
   # Check if new h5f already exists
   if (file.exists(new_h5_name)) {
     stop(paste("File [", new_h5_name, "] already exists."))
@@ -1361,7 +1427,11 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
   #       Boolean; overwrite h5f file if it exists (default = FALSE)
   #   - merged:
   #       Boolean; if TRUE, the h5f file is merged output from merge_h5_files() (default = FALSE)
-  
+  # RETURN:
+  #       Phylo object with edge.length set to per-edge mutation
+  #       burden (summed assigned_edges across loci); written to h5f
+  #       as "scm_scaled_tree" if write = TRUE.
+
   # If overwrite = FALSE, test if scm_scaled_tree already exists in h5f
   if (!overwrite) {
     if("scm_scaled_tree" %in% h5ls(h5f_path, recursive = FALSE)$name) {
