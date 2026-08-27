@@ -17,5 +17,6 @@ dependencies:
   - r-parallelly
   - r-poissonbinomial
   - r-matrixstats
+  - r-rcolorbrewer
   - bioconductor-rhdf5
 

@@ -1,15 +1,15 @@
 ####* INSTALL/LOAD LIBRARIES *####
 cran_packages <- c("BiocManager", "tidyverse", "data.table",
-                    "pbapply", "pbmcapply", "vcfR",
-                    "ape", "phytools", "progress", "parallel",
-                    "matrixStats", "PoissonBinomial")
+                   "pbapply", "pbmcapply", "vcfR",
+                   "ape", "phytools", "progress", "parallel",
+                   "matrixStats", "PoissonBinomial", "RColorBrewer")
 
 for (pkg in cran_packages) {
   library(pkg, character.only = TRUE, quietly = TRUE)
 }
 
-biconductor_packages <- c("rhdf5")
-for (pkg in biconductor_packages) {
+bioconductor_packages <- c("rhdf5")
+for (pkg in bioconductor_packages) {
   library(pkg, character.only = TRUE, quietly = TRUE)
 }
 
@@ -20,7 +20,7 @@ unphred <- function(phredscore) {
   # ARGUMENTS:
   #   - phredscore:
   #       integer vector; genotype likelihood (PL)
-
+  
   prob <- 10^(-phredscore / 10)
   prob_norm <- prob / sum(prob)
   return(prob_norm)
@@ -28,7 +28,6 @@ unphred <- function(phredscore) {
 
 #* Read VCF, generate a genotype prior matrix for each SNP, and store all
 #* in a named list.
-#TODO: Consolidate this and compile_gt_states.indel into a single function
 compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   # ARGUMENTS:
   #   - vcf:
@@ -39,14 +38,14 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   #       per variant locus (TRUE) or a single long datatable
   
   # Read VCF with vcfR
-  cat("Reading vcf data...\n")
-
+  cat("Loading vcf data...\n")
+  
   # Convert vcfR object to tidy list of tibbles
   tidy_vcf <- vcfR2tidy(vcf,
                         gt_column_prepend = "",
                         allele.sep = ",",
                         format_fields = c("GT", "GQ", "PL"))
-
+  
   # Join genotype fields (FORMAT) and site-wise fixed fields by ChromKey,
   # an arbitrary chromosome ID that is indexed by order of occurence. 
   df <- left_join(tidy_vcf$gt,
@@ -55,16 +54,16 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
                     unique(),
                   by = "ChromKey") %>%
     select(CHROM, POS, Indiv, GT, GQ, PL)
-
+  
   # Add REF, ALT, AC, and AF fields to working dataframe
   df <- left_join(df,
                   tidy_vcf$fix %>%
                     select(CHROM, POS, REF, ALT, AC, AF),
                   by = c("CHROM", "POS"))
-
+  
   # Compute genotype priors from genotype likelihood (PL) fields
   cat("Computing genotype prior probabilities...\n")
-
+  
   # 1. Add field to dataframe that converts genotype code (e.g., 0/1) to
   #     a string reflecting the diploid genotype state (e.g., AG).
   # 2. Reorder dataframe columns
@@ -75,12 +74,12 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
   df <- df %>%
     mutate(locus = paste(CHROM, POS, sep = "_"),
            gt_str = case_when(GT %in% c("0/0", "0|0") ~ paste0(REF, REF),
-                            GT %in% c("1/0", "1|0", 
-                                      "0/1", "0|1") ~ paste0(REF, ALT),
-                            GT %in% c("1/1", "1|1") ~ paste0(ALT, ALT),
-                            is.na(GT) ~ NA)) %>%
+                              GT %in% c("1/0", "1|0", 
+                                        "0/1", "0|1") ~ paste0(REF, ALT),
+                              GT %in% c("1/1", "1|1") ~ paste0(ALT, ALT),
+                              is.na(GT) ~ NA)) %>%
     select(locus, CHROM, POS, REF, ALT, AC, AF,
-            Indiv, GT, gt_str, GQ, PL) %>%
+           Indiv, GT, gt_str, GQ, PL) %>%
     separate(PL, sep = ",", into=c("PL_ref", "PL_het", "PL_alt")) %>%
     mutate(GQ = as.integer(GQ),
            PL_ref = as.integer(PL_ref),
@@ -92,21 +91,25 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
     mutate(Pref = unphred(c(PL_ref, PL_het, PL_alt))[1],
            Phet = unphred(c(PL_ref, PL_het, PL_alt))[2],
            Palt = unphred(c(PL_ref, PL_het, PL_alt))[3])
-
+  
   # Rearrange data frame and convert to data table for faster access
   df <- df %>%
     arrange(CHROM, POS) %>%
     select(locus, REF, ALT, gt_str, 
-            Indiv, Pref, Phet, Palt) %>%
+           Indiv, Pref, Phet, Palt) %>%
     as.data.table()
-
+  
   # If mat_list argument is set to FALSE, return long data table. Otherwise,
   # return a list of data tables where each is named as <CHROM>_<POS>.
   if (mat_list == FALSE){
-    return(df)
+    df.snp <- df %>%
+      group_by(locus) %>%
+      filter(REF %in% c("A", "C", "G", "T") & ALT %in% c("A", "C", "G", "T"))
+    return(df.snp)
+
   } else {
     cat("Assembling genotype prior state matrices for SNPs...\n")
-
+    
     # Subset datatable to SNP loci using REF and ALT character string matching
     df.snp <- df %>%
       group_by(locus) %>%
@@ -119,7 +122,7 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
         sort(x) %>% paste0(., collapse = "")
       }) %>%
       unlist()
-
+    
     # 1. Split datatable by locus (<CHROM_POS>) and retain only
     #     the locus, Indiv, and 3 observed genotype prior columns
     # 2. Add all genotype states that are unobserved and set
@@ -131,33 +134,33 @@ compile_gt_states.snp <- function(vcf, mat_list = TRUE) {
         ref <- head(x, n = 1) %>% pull(REF)
         alt <- head(x, n = 1) %>% pull(ALT)
         colnames(x) <- c("locus","REF","ALT","gt_str","Indiv",
-                       paste0(c(ref, ref), collapse = ""),
-                       paste0(sort(c(ref, alt)), collapse = ""),
-                       paste0(c(alt, alt), collapse = ""))
+                         paste0(c(ref, ref), collapse = ""),
+                         paste0(sort(c(ref, alt)), collapse = ""),
+                         paste0(c(alt, alt), collapse = ""))
         return(x %>%
                  select(!c(REF, ALT, gt_str)) %>%
                  as.data.table())
       }) %>%
       pblapply(., function(x) {
         cols_to_add <- setdiff(c("AA", "CC", "GG", "TT", "AC",
-                                  "AG", "AT", "CG", "CT", "GT"),
-                                colnames(x)[3:5])
+                                 "AG", "AT", "CG", "CT", "GT"),
+                               colnames(x)[3:5])
         x[, cols_to_add] = 0
-
+        
         x <- x %>%
           select(locus,
                  Indiv,
                  c("AA", "CC", "GG", "TT", "AC",
-                    "AG", "AT", "CG", "CT", "GT"))
-
+                   "AG", "AT", "CG", "CT", "GT"))
+        
         return(x)
       })
-
+    
     # Name each datatable in list by <CHROM>_<POS>
     names(gt_list.snp) <- df.snp %>% 
-                          group_keys() %>%
-                          pull()
-
+      group_keys() %>%
+      pull()
+    
     # Return list of named genotype prior datatables for SNPs
     return(gt_list.snp)
   }
@@ -170,13 +173,13 @@ read_cellphy_model <- function(bestModel_path) {
   #   - bestModel_path:
   #       bestModel text output from `cellphy` run with
   #       best-fit GT10 substitution model.
-
+  
   RateCats <- c("Zero", "AC", "AG", "AT", "CG", "CT", "GT")
   States <- c("AA", "CC", "GG", "TT", "AC", "AG", "AT", "CG", "CT", "GT")
-
+  
   #Read bestmodel file
   txt <- read_file(file = as.character(bestModel_path))
-
+  
   #Digest rates matrix from bestmodel file
   Rates <- txt %>%
     str_split(pattern = "\\+") %>%
@@ -188,14 +191,14 @@ read_cellphy_model <- function(bestModel_path) {
     unlist() %>%
     as.numeric()
   names(Rates) <- RateCats
-
+  
   alpha <- Rates["AC"]
   beta <- Rates["AG"]
   gamma <- Rates["AT"]
   kappa <- Rates["CG"]
   lambda <- Rates["CT"]
   mu <- Rates["GT"]
-
+  
   #Digest state frequencies matrix from bestmodel file
   Freq <- txt %>%
     str_split(pattern = "\\+") %>%
@@ -208,128 +211,128 @@ read_cellphy_model <- function(bestModel_path) {
     unlist() %>%
     as.numeric()
   names(Freq) <- States
-
+  
   #Populate Q matrix columns in the following order:
   #"AA","CC","GG","TT","AC","AG","AT","CG","CT","GT"
   AAvec <- c(NA,
-          Rates["Zero"],
-          Rates["Zero"],
-          Rates["Zero"],
-          alpha * Freq["AA"],
-          beta * Freq["AA"],
-          gamma * Freq["AA"],
-          Rates["Zero"],
-          Rates["Zero"],
-          Rates["Zero"])
+             Rates["Zero"],
+             Rates["Zero"],
+             Rates["Zero"],
+             alpha * Freq["AA"],
+             beta * Freq["AA"],
+             gamma * Freq["AA"],
+             Rates["Zero"],
+             Rates["Zero"],
+             Rates["Zero"])
   AAvec <- unname(AAvec)
-
+  
   CCvec <- c(Rates["Zero"],
-          NA,
-          Rates["Zero"],
-          Rates["Zero"],
-          alpha * Freq["CC"],
-          Rates["Zero"],
-          Rates["Zero"],
-          kappa * Freq["CC"],
-          lambda * Freq["CC"],
-          Rates["Zero"])
+             NA,
+             Rates["Zero"],
+             Rates["Zero"],
+             alpha * Freq["CC"],
+             Rates["Zero"],
+             Rates["Zero"],
+             kappa * Freq["CC"],
+             lambda * Freq["CC"],
+             Rates["Zero"])
   CCvec <- unname(CCvec)
-
+  
   GGvec <- c(Rates["Zero"],
-          Rates["Zero"],
-          NA,
-          Rates["Zero"],
-          Rates["Zero"],
-          beta * Freq["GG"],
-          Rates["Zero"],
-          kappa * Freq["GG"],
-          Rates["Zero"],
-          mu * Freq["GG"])
+             Rates["Zero"],
+             NA,
+             Rates["Zero"],
+             Rates["Zero"],
+             beta * Freq["GG"],
+             Rates["Zero"],
+             kappa * Freq["GG"],
+             Rates["Zero"],
+             mu * Freq["GG"])
   GGvec <- unname(GGvec)
-
+  
   TTvec <- c(Rates["Zero"],
-          Rates["Zero"],
-          Rates["Zero"],
-          NA,
-          Rates["Zero"],
-          Rates["Zero"],
-          gamma * Freq["TT"],
-          Rates["Zero"],
-          lambda * Freq["TT"],
-          mu * Freq["TT"])
+             Rates["Zero"],
+             Rates["Zero"],
+             NA,
+             Rates["Zero"],
+             Rates["Zero"],
+             gamma * Freq["TT"],
+             Rates["Zero"],
+             lambda * Freq["TT"],
+             mu * Freq["TT"])
   TTvec <- unname(TTvec)
-
+  
   ACvec <- c(alpha * Freq["AC"],
-          alpha * Freq["AC"],
-          Rates["Zero"],
-          Rates["Zero"],
-          NA,
-          kappa * Freq["AC"],
-          lambda * Freq["AC"],
-          beta * Freq["AC"],
-          gamma * Freq["AC"],
-          Rates["Zero"])
+             alpha * Freq["AC"],
+             Rates["Zero"],
+             Rates["Zero"],
+             NA,
+             kappa * Freq["AC"],
+             lambda * Freq["AC"],
+             beta * Freq["AC"],
+             gamma * Freq["AC"],
+             Rates["Zero"])
   ACvec <- unname(ACvec)
-
+  
   AGvec <- c(beta * Freq["AG"],
-          Rates["Zero"],
-          beta * Freq["AG"],
-          Rates["Zero"],
-          kappa * Freq["AG"],
-          NA,
-          mu * Freq["AG"],
-          alpha * Freq["AG"],
-          Rates["Zero"],
-          gamma * Freq["AG"])
+             Rates["Zero"],
+             beta * Freq["AG"],
+             Rates["Zero"],
+             kappa * Freq["AG"],
+             NA,
+             mu * Freq["AG"],
+             alpha * Freq["AG"],
+             Rates["Zero"],
+             gamma * Freq["AG"])
   AGvec <- unname(AGvec)
-
+  
   ATvec <- c(gamma * Freq["AT"],
-          Rates["Zero"],
-          Rates["Zero"],
-          gamma * Freq["AT"],
-          lambda * Freq["AT"],
-          mu * Freq["AT"],
-          NA,
-          Rates["Zero"],
-          alpha * Freq["AT"],
-          beta * Freq["AT"])
+             Rates["Zero"],
+             Rates["Zero"],
+             gamma * Freq["AT"],
+             lambda * Freq["AT"],
+             mu * Freq["AT"],
+             NA,
+             Rates["Zero"],
+             alpha * Freq["AT"],
+             beta * Freq["AT"])
   ATvec <- unname(ATvec)
   CGvec <- c(Rates["Zero"],
-          kappa * Freq["CG"],
-          kappa * Freq["CG"],
-          Rates["Zero"],
-          beta * Freq["CG"],
-          alpha * Freq["CG"],
-          Rates["Zero"],
-          NA,
-          mu * Freq["CG"],
-          lambda * Freq["CG"])
+             kappa * Freq["CG"],
+             kappa * Freq["CG"],
+             Rates["Zero"],
+             beta * Freq["CG"],
+             alpha * Freq["CG"],
+             Rates["Zero"],
+             NA,
+             mu * Freq["CG"],
+             lambda * Freq["CG"])
   CGvec <- unname(CGvec)
-
+  
   CTvec <- c(Rates["Zero"],
-          lambda * Freq["CT"],
-          Rates["Zero"],
-          lambda * Freq["CT"],
-          gamma * Freq["CT"],
-          Rates["Zero"],
-          alpha * Freq["CT"],
-          mu * Freq["CT"],
-          NA,
-          kappa * Freq["CT"])
+             lambda * Freq["CT"],
+             Rates["Zero"],
+             lambda * Freq["CT"],
+             gamma * Freq["CT"],
+             Rates["Zero"],
+             alpha * Freq["CT"],
+             mu * Freq["CT"],
+             NA,
+             kappa * Freq["CT"])
   CTvec <- unname(CTvec)
-
+  
   GTvec <- c(Rates["Zero"],
-          Rates["Zero"],
-          mu * Freq["GT"],
-          mu * Freq["GT"],
-          Rates["Zero"],
-          gamma * Freq["GT"],
-          beta * Freq["GT"],
-          lambda * Freq["GT"],
-          kappa * Freq["GT"],
-          NA)
+             Rates["Zero"],
+             mu * Freq["GT"],
+             mu * Freq["GT"],
+             Rates["Zero"],
+             gamma * Freq["GT"],
+             beta * Freq["GT"],
+             lambda * Freq["GT"],
+             kappa * Freq["GT"],
+             NA)
   GTvec <- unname(GTvec)
-
+  
   #Assemble Q matrix and compute diagonal
   Q <- matrix(c(AAvec, CCvec, GGvec, TTvec, ACvec,
                 AGvec, ATvec, CGvec, CTvec, GTvec),
@@ -344,7 +347,7 @@ read_cellphy_model <- function(bestModel_path) {
   Q[8, 8] <- sum(Q[8, ], na.rm = TRUE) * -1
   Q[9, 9] <- sum(Q[9, ], na.rm = TRUE) * -1
   Q[10, 10] <- sum(Q[10, ], na.rm = TRUE) * -1
-
+  
   #Name dimensions
   colnames(Q) <- States
   rownames(Q) <- States
@@ -366,41 +369,41 @@ singleton_lrt <- function(x, gt_state_list, pbopt = "DivideFFT") {
   # Grab focal genotype-prior matrix from gt_state_list
   df <- tibble(gt_state_list[[x]]) %>%
     select_if(~ !is.numeric(.) || sum(.) != 0)
-
+  
   # Pull observed states
   states <- df %>%
     select(!c(locus, Indiv)) %>%
     colnames()
-
+  
   # Pull prior consensus state from genotype priors
   prior_con <- df %>%
     select(!c(locus, Indiv)) %>%
     colMeans() %>%
     .[which.max(.)] %>%
     names()
-
+  
   # Obtain mutant states
   var_states <- states[states != prior_con]
-
+  
   # Compute likelihood of singleton (null)
-  # Set pmin to 1 to avoid propogating rounding errors that would introduce a p > 1
+  # Set pmin to 1 to avoid propagating rounding errors that would introduce a p > 1
   p_null <- dpbinom(x = 1, 
-              probs = rowSums(df[, var_states]) %>%
+                    probs = rowSums(df[, var_states]) %>%
                       pmin(1),
-              log = TRUE,
-              method = pbopt)
-
+                    log = TRUE,
+                    method = pbopt)
+  
   # Compute likelihood of not singleton (alternative)
   p_alt <- dpbinom(x = c(0, seq(2, nrow(df))), 
-             probs = rowSums(df[, var_states]) %>%
+                   probs = rowSums(df[, var_states]) %>%
                      pmin(1),
-             log = TRUE,
-             method = pbopt) %>%
-           logSumExp(na.rm = TRUE)
-
+                   log = TRUE,
+                   method = pbopt) %>%
+    logSumExp(na.rm = TRUE)
+  
   # Compute LRT p-value; P(H0 | Data)
   stat <- -2 * (p_null - p_alt)
-
+  
   # Return p-value
   return(pchisq(q = stat, df = 1, lower.tail = FALSE))
 }
@@ -408,8 +411,8 @@ singleton_lrt <- function(x, gt_state_list, pbopt = "DivideFFT") {
 ####* STOCHASTIC CHARACTER MAPPING *####
 
 # Run phytools::make.simmap() for a single locus
-runSCM_single <- function(x, tree, gt_state_list, 
-                          Qmat, reduced = F, reps = 100,
+runSCM_single <- function(x, tree, gt_state_list,
+                          Qmat, reduced = FALSE, reps = 100,
                           root_state = "equal", cores = 1,
                           quietly = TRUE) {
   # ARGUMENTS:
@@ -419,11 +422,9 @@ runSCM_single <- function(x, tree, gt_state_list,
   #       Phylo object with tip for each of the samples in gt_state_list$<x>
   #   - gt_state_list
   #       List of genotype state priors generated by
-  #       compile_gt_states.snp(mat_list = T) or
-  #       compile_gt_states.indel(mat_list = T)
+  #       compile_gt_states.snp(mat_list = T)
   #   - Qmat:
-  #       Substitution matrix generated by read_cellphy_model or
-  #       generate_indel_model
+  #       Substitution matrix generated by read_cellphy_model()
   #   - reduced:
   #       Boolean; subset genotype state matrix (gt_state_list$<x>) to
   #       only the observed genotype states
@@ -435,7 +436,7 @@ runSCM_single <- function(x, tree, gt_state_list,
   #       Number of cores to use for make.simmap()
   #   - quietly:
   #       Suppress stdout
-
+  
   # Report error if more than one locus string is supplied to x
   if (length(x) > 1){
     return(print("ERROR: >1 variant used for input"))
@@ -447,7 +448,7 @@ runSCM_single <- function(x, tree, gt_state_list,
     select(!locus) %>%
     column_to_rownames(var = "Indiv")
   
-  # If reduced == TRUE, subset gt_matrix and Qto only the observed states
+  # If reduced == TRUE, subset gt_matrix and Q to only the observed states
   if (reduced == T) {
     gt_matrix  <-  gt_matrix %>% 
       select(where(~sum(.) != 0))
@@ -473,7 +474,7 @@ runSCM_single <- function(x, tree, gt_state_list,
                    Q = Qmat,
                    pi = root_state,
                    nsim = as.integer(round(reps / cores))) %>%
-         do.call("c", .)
+    do.call("c", .)
   
   # Reclass simmap if not properly classed by output above
   if(!("multiSimmap" %in% class(scm))) {
@@ -482,8 +483,8 @@ runSCM_single <- function(x, tree, gt_state_list,
   
   # Clear cluster
   stopCluster(cl)
-
-  # Return multiimmap object
+  
+  # Return multiSimmap object
   return(scm)
 }
 
@@ -504,7 +505,7 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
   #       Boolean; set TRUE to add genotype state legend to plot
   #   - title:
   #       String; title for plot.
-
+  
   # Check vital inputs
   if (missing(locus)) {
     stop("ERROR: 'locus' string must be provided.")
@@ -515,11 +516,11 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
   if (!inherits(multiSimmap, "multiSimmap")) {
     stop("ERROR: 'multiSimmap' object must be of class 'multiSimmap'.")
   }
-
+  
   if (!quietly) {
     cat(paste0("Summarising SCM...\n"))
   }
-
+  
   # Load data from multiSimmap (ancestral state estimates and tree)
   scm_summary <- summary(multiSimmap) #! Longest step
   scm_summary <- scm_summary$ace %>% as.data.frame()
@@ -534,7 +535,7 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
                                 threshold = PPthreshold)
   # assign rowname to the node column
   scm_summary$node <- rownames(scm_summary)
-
+  
   # Assign tip labels their node numbers according to the node numbering
   # conventions from ape & phytools. Made consistent with the input tree.
   scm_summary[(tree$Nnode + 1) : nrow(scm_summary), ]$node <- 1:(length(tree$tip.label))
@@ -546,7 +547,7 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
   if (!quietly) {
     print("Preparing output...")
   }
-
+  
   # Prepare genotype posteriors per node/tip data frame:
   #   - Ordered sequentially by node/tip number
   #   - All genotype states are present as columns
@@ -556,74 +557,74 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
     select(!c(node, constate))
   rownames(out) <- NULL
   cols_to_add <- setdiff(c("AA", "CC", "GG", "TT", "AC",
-                            "AG", "AT", "CG", "CT", "GT"), 
-                          colnames(out))
+                           "AG", "AT", "CG", "CT", "GT"), 
+                         colnames(out))
   out[,cols_to_add] <- 0
   out <- out %>% 
     select("AA", "CC", "GG", "TT", "AC",
-            "AG", "AT", "CG", "CT", "GT")
-
+           "AG", "AT", "CG", "CT", "GT")
+  
   # Create a vector of consensus state posteriors (in node order)
   constate_posteriors <- apply(out, 1, max)
-
+  
   # Create an output dataframe for the 95% HPD character state transitions
   # for each permissible genotype substitution
   ## Define all possible unphased genotype states
   states <- c("AA", "CC", "GG", "TT", "AC",
-            "AG", "AT", "CG", "CT", "GT")
-
+              "AG", "AT", "CG", "CT", "GT")
+  
   ## Create empty dataframe to store the count of
   ## 95% HPD character state transitions
   hpd.df <- expand.grid(states,states) %>%
-              dplyr::filter(Var1 != Var2) %>%
-              apply(., 1, function(x){
-                from <- strsplit(x[1], "")[[1]]
-                to <- strsplit(x[2], "")[[1]]
-                if (from[1] == from[2] & from[1] %in% to) {
-                  return(x)
-                }
-                if (sum(from %in% to) == 1) {
-                  return(x)
-                }
-              }) %>%
-              purrr::compact() %>%
-              dplyr::bind_rows() %>%
-              dplyr::arrange(Var1) %>%
-              dplyr::rename(from = Var1, to = Var2) %>%
-              dplyr::mutate(lower_95hpd = 0,
-                    upper_95hpd = 0)
-
+    dplyr::filter(Var1 != Var2) %>%
+    apply(., 1, function(x){
+      from <- strsplit(x[1], "")[[1]]
+      to <- strsplit(x[2], "")[[1]]
+      if (from[1] == from[2] & from[1] %in% to) {
+        return(x)
+      }
+      if (sum(from %in% to) == 1) {
+        return(x)
+      }
+    }) %>%
+    purrr::compact() %>%
+    dplyr::bind_rows() %>%
+    dplyr::arrange(Var1) %>%
+    dplyr::rename(from = Var1, to = Var2) %>%
+    dplyr::mutate(lower_95hpd = 0,
+                  upper_95hpd = 0)
+  
   ## Create density object for SCM posteriors                  
   dens.data <- density(multiSimmap)
-
+  
   ## Obtain the 95% HPD character state transitions and 
   ## populate hpd.df
   hpd.df <- lapply(1:nrow(hpd.df), function(x) {
-              # Get row from hpd.df
-              row <- hpd.df[x,]
-              # Create string for genotype transition
-              trans.str <- paste0(row[1, 1], "->", row[1, 2])
-
-              # If transition is present in multiSimmap density data
-              # populate hpd.df with 95% HPD transition counts
-              if (trans.str %in% dens.data$trans) {
-                i <- which(dens.data$trans == trans.str)
-                row$lower_95hpd <- dens.data$hpd[[i]][1,1]
-                row$upper_95hpd <- dens.data$hpd[[i]][1,2]
-                return(row)
-              } else {
-                return(row)
-              }
-            }) %>%
-            bind_rows() %>% 
-            as.data.frame()
-
+    # Get row from hpd.df
+    row <- hpd.df[x,]
+    # Create string for genotype transition
+    trans.str <- paste0(row[1, 1], "->", row[1, 2])
+    
+    # If transition is present in multiSimmap density data
+    # populate hpd.df with 95% HPD transition counts
+    if (trans.str %in% dens.data$trans) {
+      i <- which(dens.data$trans == trans.str)
+      row$lower_95hpd <- dens.data$hpd[[i]][1,1]
+      row$upper_95hpd <- dens.data$hpd[[i]][1,2]
+      return(row)
+    } else {
+      return(row)
+    }
+  }) %>%
+    bind_rows() %>% 
+    as.data.frame()
+  
   # Plotting
   if (plot == TRUE) {
     # Set colors for all 10 SNP genotype state
     cols <- setNames(brewer.pal(n = 10, name = "Set3"),
-                  c("AA", "CC", "GG", "TT", "AC",
-                    "AG", "AT", "CG", "CT", "GT"))
+                     c("AA", "CC", "GG", "TT", "AC",
+                       "AG", "AT", "CG", "CT", "GT"))
     # Use `phytools` default plotting method for multiSimmap
     plot(summary(multiSimmap),
          type = "phylogram",
@@ -632,14 +633,13 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
          fsize = 1,
          ftype = "off",
          lwd = 1,
-         cex = c(0.25, 0.25),
          cex = c(0.5, 0.5),
          mar = c(2, 0.1, 2, 0.1),
          outline = FALSE)
     
     # Add title (if specified)
     title(main = title)
-
+    
     # Add legend (if specified)
     if (legend == TRUE) {
       legend("bottom",
@@ -656,10 +656,10 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
              bty = "n",
              cex = 1)
     }
-
+    
     # Add scale bar
     add.scale.bar(length = 0.01)
-
+    
     # If state change detected, plot on tree as black diamond
     if (sum(detect_state_changes(tree$edge, genotype_states)) > 0) {
       edgelabels(text = "",
@@ -671,26 +671,31 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
                  adj = c(0.5, 0.5))
     }
   }
-
+  
   # Return a list containing:
-  #   1. locus name
-  #   2. scm_summary:
+  #   1. locus: 
+  #       locus name
+  #   2. gt_posteriors:
   #       Dataframe of genotype state posteriors
-  #   3. assigned:
+  #   3. assigned_edges:
   #       Binary vector of whether a character state change occurred
   #       and reported in same order as <phylo>$edge.length
-  #   4. constate_PPs:
+  #   4. consensus_posteriors:
   #       Posterior estimate for each node/tip (in node order)
-  #   5. QloGL:
+  #   5. QlogL:
   #       Log likelihood of Q matrix given observations of tree and 
   #       tip states.
   #       ! Note that QlogL will have to be revised if Q is input
   #       ! as a prior distribution rather than fixed.
-  #   6. Number of SCM replicates
-  #   7. Count of 95% HPD character state transitions
+  #   6. scm_reps:
+  #       Number of SCM replicates
+  #   7. hpd_counts:
+  #       Count of 95% HPD character state transitions
+  
   return(list("locus" = locus,
               "gt_posteriors" = out,
-              "assigned_edges" = detect_state_changes(tree$edge, genotype_states),
+              "assigned_edges" = detect_state_changes(tree$edge,
+                                                      genotype_states),
               "consensus_posteriors" = constate_posteriors,
               "QlogL" = multiSimmap[[1]]$logL[1],
               "scm_reps" = length(multiSimmap),
@@ -724,20 +729,17 @@ detect_state_changes <- function(tree_edges, states){
   #         3. tree_edges[n,] are edge indices
   #   - states:
   #       Consensus state in node order
-
+  
   # If root state is NA, return 0's for all branches and exit
   if ( is.na(states[tree_edges[1, ][1]]) ){
     return(rep(0, nrow(tree_edges)))
   }
-
-  # Pull root genotype from first index of states
-  root_state <- states[1]
   
   # For each edge of tree (row in tree_edges):
   # vector[1] = parent node
   # vector[2] = daughter node
   apply(tree_edges, 1, function(x){
-
+    
     # If parent state uncertain, assign parent state to most recent high confidence state;
     # this will always resolve to a non-NA state given the conditional test at the root.
     while ( is.na(states[x[1]]) ) {
@@ -768,9 +770,9 @@ scm_to_h5f <- function(scm_summary, loc_str, h5f) {
   #       Output from `summarise_scm.snp`
   #   - loc_str:
   #       String; name of locus for which SCM was run
-  #   - h5f_path:
+  #   - h5f:
   #       Path to write h5f file
-
+  
   # Write SCM results to h5f
   h5write(obj = scm_summary$gt_posteriors,
           file = h5f,
@@ -793,9 +795,9 @@ simplified_scm_to_h5f <- function(assigned_edge_vector, loc_str, h5f) {
   #       Binary vector in same format as scm_summary$assigned_edges
   #   - loc_str:
   #       String; name of locus for which SCM was run
-  #   - h5f_path:
+  #   - h5f:
   #       Path to write h5f file
-
+  
   # Write SCM results to h5f
   h5write(obj = NA,
           file = h5f,
@@ -816,9 +818,9 @@ rm_locus_from_h5f <- function(loc_str, h5f) {
   # ARGUMENTS:
   #   - loc_str:
   #       String; name of locus for which SCM was run
-  #   - h5f_path:
+  #   - h5f:
   #       Path to write h5f file
-
+  
   # Remove locus from h5f at all levels present
   try(h5delete(h5f, paste0("/gt_posteriors/", loc_str)), silent = TRUE)
   try(h5delete(h5f, paste0("/assigned_edges/", loc_str)), silent = TRUE)
@@ -835,7 +837,7 @@ check_locus_in_h5f <- function(loc_str, h5f_group_df) {
   #   - h5f_group_df:
   #       h5f group df generated using the following function: 
   #       h5ls("path/to/filename.h5", recursive = T) %>% filter(! group == "/")
-
+  
   # Check if locus is present in all levels of h5f
   if (nrow(h5f_group_df %>% filter(name == loc_str)) != 5) {
     return(FALSE)
@@ -849,27 +851,27 @@ check_h5f_entries <- function(h5f_path) {
   # ARGUMENTS:
   #   - h5f_path:
   #       Path to h5f file
-
+  
   # Create a dataframe with all groups in h5f
   df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
-
+  
   # Check if h5f is empty
   if (nrow(df) == 0) {
     cat("H5 file is empty.\n")
     return(invisible(TRUE))
   }
-
+  
   # Pull each unique locus name from h5f groups
   entries <- df %>% 
     pull(name) %>%
     unique()
-
+  
   # Create a logical vector to check if each locus is present in all groups of h5f
   test_vector <- lapply(entries, function(x) {
     check_locus_in_h5f(loc_str = x,
                        h5f_group_df = df)
   }) %>% unlist()
-
+  
   # If any values in test_vector are FALSE, remove them from h5
   if (sum(!test_vector) == 0) {
     cat("All entries added correctly.\n")
@@ -890,8 +892,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   # ARGUMENTS:
   #   - gt_state_list:
   #       List of genotype state priors generated by
-  #       compile_gt_states.snp(mat_list = T) or
-  #       compile_gt_states.indel(mat_list = T)
+  #       compile_gt_states.snp(mat_list = T)
   #   - chr_str:
   #       String; chromosome name
   #   - h5f_path:
@@ -909,12 +910,12 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   #   - overwrite:
   #       Boolean; overwrite h5f file if it exists (default = FALSE)
   #   - dryrun:
-  #       Boolean; check inputs and  (default = FALSE)
+  #       Boolean; check inputs and report run info (default = FALSE)
   #   - brute:
   #       Boolean; run SCM on all loci (default = TRUE), else only run on loci
   #       which fail singleton LRT test (p ≤ 0.05).
   
-
+  
   ######## INPUT CHECK ########
   # If gt_state_list, chr_str, h5f_path, tree, or Q are missing, return error
   if (missing(gt_state_list)) {
@@ -942,7 +943,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
       file.remove(h5f_path)
     }
   }
-
+  
   # Generate loci_in_h5f object that is a vector with loci already fully analyzed
   # If h5f exists and overwrite = FALSE, check that all loci were added correctly
   if (file.exists(h5f_path) & overwrite == FALSE) {
@@ -950,18 +951,18 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     
     #Create a dataframe with all groups in h5f
     df <- h5ls(h5f_path, recursive = TRUE) %>% filter(! group == "/")
-
+    
     #Pull each unique locus name from h5f groups
     entries <- df %>% 
-               pull(name) %>%
-               unique()
-
+      pull(name) %>%
+      unique()
+    
     #Create a logical vector to check if each locus is present in all groups of h5f
     test_vector <- lapply(entries, function(x) {
       check_locus_in_h5f(loc_str = x,
                          h5f_group_df = df)
     }) %>% unlist()
-
+    
     # If any values in test_vector are FALSE, remove them from h5
     if (sum(!test_vector) == 0) {
       cat("All entries added correctly.\n")
@@ -974,13 +975,13 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
           rm_locus_from_h5f(loc_str = x, h5f = h5f_path)
         }
         loci_in_h5f <- h5ls(h5f_path,recursive = T) %>% 
-                       filter(group == "/summary") %>% 
-                       pull(name)
+          filter(group == "/summary") %>% 
+          pull(name)
       } else {
         loci_in_h5f <- entries[test_vector]
       }
     }
-
+    
     # Given that the h5f file exists, check if static levels are present
     if(!all(c("tree", "reps", "Q") %in% h5ls(h5f_path, recursive = FALSE)$name)) {
       cat("Static levels missing from h5f.\n")
@@ -989,7 +990,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
         try(h5delete(h5f_path, "tree"), silent = TRUE)
         try(h5delete(h5f_path, "reps"), silent = TRUE)
         try(h5delete(h5f_path, "Q"), silent = TRUE)
-
+        
         cat("Adding tree, Q, and num. of reps to h5f...\n")
         h5write(obj = write.tree(phy = tree),
                 file = h5f_path,
@@ -998,7 +999,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                 file = h5f_path,
                 name = "reps")
         h5write(obj = as.data.frame(Q) %>% 
-                        rownames_to_column(var = "from"),
+                  rownames_to_column(var = "from"),
                 file = h5f_path,
                 name = "Q")
       }
@@ -1007,7 +1008,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     # If h5f does not exist or overwrite = T, set loci_in_h5f to NULL
     loci_in_h5f <- NULL
   }
-
+  
   # If h5f exists and overwrite = TRUE, remove and replace h5f levels
   if (file.exists(h5f_path) & overwrite == TRUE & dryrun == FALSE) {
     cat("H5 file exists and overwrite = TRUE.\nCreating new H5 file...\n")
@@ -1021,7 +1022,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     h5createGroup(h5f_path, "consensus_posteriors")
     h5createGroup(h5f_path, "hpd_counts")
     h5createGroup(h5f_path, "summary")
-
+    
     #Static groups
     h5write(obj = write.tree(phy = tree),
             file = h5f_path,
@@ -1030,11 +1031,11 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
             file = h5f_path,
             name = "reps")
     h5write(obj = as.data.frame(Q) %>% 
-                    rownames_to_column(var = "from"),
+              rownames_to_column(var = "from"),
             file = h5f_path,
             name = "Q")
   }
-
+  
   # If h5f does not exist, create h5f file and groups
   if (!file.exists(h5f_path) & dryrun == FALSE) {
     cat("Creating new H5 file...\n")
@@ -1054,20 +1055,20 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
             file = h5f_path,
             name = "reps")
     h5write(obj = as.data.frame(Q) %>% 
-                    rownames_to_column(var = "from"),
+              rownames_to_column(var = "from"),
             file = h5f_path,
             name = "Q")
   }
-
+  
   # If h5f does not exist and dryrun = TRUE, return message and exit
   if (!file.exists(h5f_path) & dryrun == TRUE) {
     cat(paste0("Output file [", h5f_path,"] will be created.\n"))
   }
-
+  
   ######## PREP SCM LOOP ########
   # Set root node index
   root_node <- length(tree$tip.label) + 1
-
+  
   # If chr_str == "all", run SCM on all loci in gt_state_list
   # Else, run SCM on all loci in gt_state_list with chr_str
   if (chr_str == "all") {
@@ -1077,7 +1078,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
                  x = names(gt_state_list),
                  value = TRUE)
   }
-
+  
   # If all loci are already in h5f, return
   if (all(loci %in% loci_in_h5f)) {
     return(cat("All loci already in h5f.\n"))
@@ -1085,18 +1086,18 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     loci <- loci[!loci %in% loci_in_h5f]
     cat(paste0("Number of loci to be analyzed: ", length(loci)), "\n")
   }
-
+  
   # Set progress bar
   n_rec <- length(loci)
   # pb <- progress_bar$new(
   #   format = "  progress (:current/:total) [:bar] elapsed: :elapsedfull, eta: :eta",
   #   total = n_rec, clear = FALSE, width = options()$width)
-
+  
   # If dryrun = TRUE, return loci_in_h5f and exit
   if (dryrun == TRUE) {
     return(cat("Dryrun complete.\n"))
   }
-
+  
   ######## RUN SCM LOOP ########
   cat("Running SCM...\n")
   
@@ -1104,54 +1105,54 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
   for (i in 1:n_rec){
     start_time <- Sys.time()
     cat(paste0(format(Sys.time(), "[%D %H:%M:%S]"),
-        " Processing ",
-        i,
-        "/",
-        n_rec,
-        ": ",
-        loci[i],
-        "...\n"))
-
+               " Processing ",
+               i,
+               "/",
+               n_rec,
+               ": ",
+               loci[i],
+               "...\n"))
+    
     # Test probability of mutation being a singleton
     p_singleton <- singleton_lrt(x = loci[i], 
                                  gt_state_list = gt_state_list)
-
+    
     # Simplify assignment to terminal branch if 
     # locus if p_singleton > 0.05 and brute = FALSE
     if (brute == FALSE & p_singleton > 0.05) {
-
+      
       # Pull genotype state priors for locus  
       df <- tibble(gt_state_list[[loci[i]]]) %>%
         select_if(~ !is.numeric(.) || sum(.) != 0)
-
+      
       # Pull observed states for locus
       states <- df %>%
         select(!c(locus, Indiv)) %>%
         colnames()
-
+      
       # Pull prior consensus state from genotype priors
       prior_con <- df %>%
         select(!c(locus, Indiv)) %>%
         colMeans() %>%
         .[which.max(.)] %>%
         names()
-
+      
       # Obtain mutant states
       var_states <- states[states != prior_con]
-
+      
       # Singleton tip
       singleton_tip <- df %>%
         mutate(var_p = rowSums(.[, var_states])) %>%
         arrange(desc(var_p)) %>%
         slice(1) %>% 
         pull(Indiv)
-
+      
       # get index of singleton tip in vector of tip labels
       tip_idx <- which(tree$tip.label == singleton_tip)
       
       # use tip_idx to get the associated terminal edge index
       edge_idx <- which(tree$edge[, 2] == tip_idx)
-
+      
       # create edge vector to capture the assigned edge
       edge_v <- rep(0, nrow(tree$edge))
       edge_v[edge_idx] <- 1
@@ -1175,24 +1176,24 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
       
       # End timer
       end_time <- Sys.time()
-
+      
       # Assemble simplified summary
       summary_df <- data.frame("chr" = str_split(loci[i], "_")[[1]][1],
-                      "locus" = str_split(loci[i], "_")[[1]][2],
-                      "germline" = prior_con,
-                      "iterations" = NA,
-                      "cores" = NA,
-                      "runtime" = as.numeric(
-                        difftime(
-                                end_time,
-                                start_time,
-                                units = "sec")
-                      ),
-                      "muts95low" = NA,
-                      "muts95high" = NA,
-                      "muts_assigned" = 1,
-                      "QlogL" = NA,
-                      "p_singleton" = p_singleton)
+                               "locus" = str_split(loci[i], "_")[[1]][2],
+                               "germline" = prior_con,
+                               "iterations" = NA,
+                               "cores" = NA,
+                               "runtime" = as.numeric(
+                                 difftime(
+                                   end_time,
+                                   start_time,
+                                   units = "sec")
+                               ),
+                               "muts95low" = NA,
+                               "muts95high" = NA,
+                               "muts_assigned" = 1,
+                               "QlogL" = NA,
+                               "p_singleton" = p_singleton)
       
       # Write simplified summary to h5f
       tryCatch(
@@ -1210,7 +1211,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
           }, silent = TRUE)
         }
       )
-
+      
       # pb$tick()
       next
     }
@@ -1228,28 +1229,28 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     
     # Summarise SCM
     scm <- summarise_scm.snp(multiSimmap = scm,
-                                    locus = loci[i],
-                                    PPthreshold = PPthreshold,
-                                    plot = FALSE,
-                                    quietly = TRUE)
+                             locus = loci[i],
+                             PPthreshold = PPthreshold,
+                             plot = FALSE,
+                             quietly = TRUE)
     
     # Write SCM results to h5f
     tryCatch(
       expr = {
-          scm_to_h5f(scm_summary = scm,
-                     loc_str = loci[i],
-                     h5f = h5f_path)
+        scm_to_h5f(scm_summary = scm,
+                   loc_str = loci[i],
+                   h5f = h5f_path)
       },
       error = function(e) {
         try({
           rm_locus_from_h5f(loc_str = loci[i], h5f = h5f_path)
           scm_to_h5f(scm_summary = scm,
-                    loc_str = loci[i],
-                    h5f = h5f_path)
+                     loc_str = loci[i],
+                     h5f = h5f_path)
         }, silent = TRUE)
       }
     )
-
+    
     # Pull germline state at PPthreshold
     germ <- scm$gt_posteriors[root_node, ]
     if (any(germ >= PPthreshold)) {
@@ -1257,27 +1258,27 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
     } else {
       germ <- NA
     }
-
+    
     end_time <- Sys.time()
-
+    
     # Write summary to h5f
     summary_df <- data.frame("chr" = str_split(loci[i], "_")[[1]][1],
-                    "locus" = str_split(loci[i], "_")[[1]][2],
-                    "germline" = germ,
-                    "iterations" = scm_its,
-                    "cores" = cores,
-                    "runtime" = as.numeric(
-                      difftime(
-                              end_time,
-                              start_time,
-                              units = "sec")
-                    ),
-                    "muts95low" = sum(scm$hpd_counts$lower_95hpd),
-                    "muts95high" = sum(scm$hpd_counts$upper_95hpd),
-                    "muts_assigned" = sum(scm$assigned_edges),
-                    "QlogL" = scm$QlogL,
-                    "p_singleton" = p_singleton)
-
+                             "locus" = str_split(loci[i], "_")[[1]][2],
+                             "germline" = germ,
+                             "iterations" = scm_its,
+                             "cores" = cores,
+                             "runtime" = as.numeric(
+                               difftime(
+                                 end_time,
+                                 start_time,
+                                 units = "sec")
+                             ),
+                             "muts95low" = sum(scm$hpd_counts$lower_95hpd),
+                             "muts95high" = sum(scm$hpd_counts$upper_95hpd),
+                             "muts_assigned" = sum(scm$assigned_edges),
+                             "QlogL" = scm$QlogL,
+                             "p_singleton" = p_singleton)
+    
     tryCatch(
       expr = {
         h5write(obj = summary_df, 
@@ -1293,7 +1294,7 @@ multi_scm <- function(gt_state_list, chr_str, h5f_path, tree, Q,
         }, silent = TRUE)
       }
     )
-
+    
     # pb$tick()
   }
 }
@@ -1308,7 +1309,7 @@ merge_h5_files <- function(h5f_paths, new_h5_name){
   if (file.exists(new_h5_name)) {
     stop(paste("File [", new_h5_name, "] already exists."))
   }
-
+  
   # Check that all paths exist
   for (h5f_path in h5f_paths) {
     if (!file.exists(h5f_path)) {
@@ -1322,7 +1323,7 @@ merge_h5_files <- function(h5f_paths, new_h5_name){
   for (name in names(h5f_paths)) {
     h5createGroup(merged_h5, name)
   }
-
+  
   # For each h5f path, copy the data to the new h5f
   # using the name of the h5f as the group name
   for (name in names(h5f_paths)) {
@@ -1331,8 +1332,8 @@ merge_h5_files <- function(h5f_paths, new_h5_name){
     
     # Copy the data from the h5f to the new h5f
     for (dataset_name in h5ls(h5f) %>%
-           filter(group == "/") %>%
-           pull(name)) {
+         filter(group == "/") %>%
+         pull(name)) {
       
       H5Ocopy(h5loc = h5f,
               h5loc_dest = merged_h5,
@@ -1359,8 +1360,8 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
   #   - overwrite:
   #       Boolean; overwrite h5f file if it exists (default = FALSE)
   #   - merged:
-  #       Boolean; if TRUE, the h5f file is a merged (default = FALSE)
-
+  #       Boolean; if TRUE, the h5f file is merged output from merge_h5_files() (default = FALSE)
+  
   # If overwrite = FALSE, test if scm_scaled_tree already exists in h5f
   if (!overwrite) {
     if("scm_scaled_tree" %in% h5ls(h5f_path, recursive = FALSE)$name) {
@@ -1369,11 +1370,11 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
   } else {
     try(h5delete(h5f_path, "scm_scaled_tree"), silent = TRUE)
   }
-
+  
   if (!merged) {
     # Open h5f
     h5 <- H5Fopen(h5f_path)
-
+    
     # Test that all edge vectors are the same length
     x <- h5$`assigned_edges` %>%
       lapply(length) %>%
@@ -1382,21 +1383,21 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
     if (length(x) > 1) {
       stop("Edge vectors are not the same length", call. = FALSE)
     }
-
+    
     # Sum across all edge vectors
     edge_burdens <- h5$`assigned_edges` %>%
       lapply(unlist) %>%
       do.call(what = cbind) %>%
       t() %>%
       colSums()
-
+    
     # Assign edge lengths to tree
     tr_mutbrdn <- phylo
     tr_mutbrdn$edge.length <- edge_burdens
-
+    
     # Close h5
     h5closeAll()
-
+    
     # Write burden-scaled tree to h5
     if (write) {
       h5write(obj = write.tree(phy = tr_mutbrdn),
@@ -1406,7 +1407,7 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
   } else {
     # Read groups from h5f
     groups <- h5ls(h5f_path, recursive = FALSE)$name
-
+    
     # Test that all edge vectors are the same length
     x <- groups %>%
       lapply(function(x) {
@@ -1419,7 +1420,7 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
     if (length(x) > 1) {
       stop("Edge vectors are not the same length", call. = FALSE)
     }
-
+    
     # Sum across all edge vectors
     edge_burdens <- groups %>%
       lapply(function(x) {
@@ -1430,11 +1431,11 @@ add_scaled_tree_to_h5f <- function(h5f_path, phylo, write = FALSE, overwrite = F
       do.call(what = cbind) %>%
       t() %>%
       colSums()
-
+    
     # Assign edge lengths to tree
     tr_mutbrdn <- phylo
     tr_mutbrdn$edge.length <- edge_burdens
-
+    
     # Write burden-scaled tree to h5
     if (write) {
       h5write(obj = write.tree(phy = tr_mutbrdn),
