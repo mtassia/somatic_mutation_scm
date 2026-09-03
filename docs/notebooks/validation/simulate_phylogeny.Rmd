@@ -20,15 +20,15 @@ The objective of this notebook is to document our validation strategy for applyi
 
 This notebook will first describe the approach, key functions, and expected outcomes. Afterwards, additional layers of technical and biological variation will be introduced, including:
 
-- Sample size
+-   Sample size
 
-- Sequencing depth
+-   Sequencing depth
 
-- Missing data
+-   Missing data
 
-- Collapsing branch lengths equal to 0
+-   Collapsing branch lengths equal to 0
 
-- Infinite sites model (ISM) violation rate
+-   Infinite sites model (ISM) violation rate
 
 # Simulating hematopoiesis {#simulating-hematopoiesis}
 
@@ -69,19 +69,19 @@ hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
 
 Using the DFE above, we can simulate hematopoiesis with stochastic introduction of driver mutations using the `run_driver_process_sim()` wrapper in `rsimpop`. This function has several important parameters which will be defined below:
 
-- `simpop = NULL`: Default setting; do not use a pre-existing simpop object
+-   `simpop = NULL`: Default setting; do not use a pre-existing simpop object
 
-- `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
+-   `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
 
-- `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+-   `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
-- `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+-   `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
-- `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
+-   `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
 
-- `fitness = fitnessFn`: User-defined fitness function defined above
+-   `fitness = fitnessFn`: User-defined fitness function defined above
 
-- `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+-   `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
 The functions `get_subsampled_tree()` and `get_elapsed_time_tree()` sample a subset of the total cellular phylogeny and re-scale the branch lengths given a fixed somatic mutation rate (i.e., $16.8 \: \textrm{mutations per cell per year}$ estimated in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)). Here, we simulate a population of $P = 50,000$ HSCs, and subsequently sample $N = 100$ tips.
 
@@ -160,7 +160,7 @@ mask_path <- "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_g
 tr_mol <- scale_branches_to_subs_per_site(tr, mask = mask_path)
 
 cat(paste("  Sample tree's L: ", sum(tr$edge.length), "\n", sep = ""))
-cat(paste("Rescaled tree's L: ", sum(tr_mol$edge.length), "\n", sep = ""))
+cat(paste("Rescaled tree's L: ", sum(tr_mol$edge.length) %>% signif(digits = 4), "\n", sep = ""))
 ```
 
 ## Extracting mutation history truth
@@ -176,7 +176,8 @@ mut_mat <- create_mut_df(tr)
 mut_mat %>% 
   filter(is_driver) %>%
   select(1:9) %>%
-  head()
+  head() %>%
+  knitr::kable()
 
 ```
 
@@ -224,29 +225,29 @@ The extension of this approach for ISM violations ($\ge 2$ origins) will be disc
 
 The output of `create_mut_df()` is then passed to the `simulate_depth_and_ad()` function to simulate sequence-read data. Default parameters are set such that they mimic the structure of "cleaned" data described in [*Coorens et al. 2025*](https://www.nature.com/articles/s41596-024-00962-8)and/or modeled distribution parameters in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
-- `G`: Matrix output by `create_mut_df()`
+-   `G`: Matrix output by `create_mut_df()`
 
-- `D_bar = 20`: Target mean sequencing depth across the whole matrix
+-   `D_bar = 20`: Target mean sequencing depth across the whole matrix
 
-- `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style `min_cov`)
+-   `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style `min_cov`)
 
-- `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
+-   `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
 
-- `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
+-   `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
 
-- `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
+-   `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
 
-- `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
+-   `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
 
-- `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
+-   `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
 
-- `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
+-   `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
 
-- `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
+-   `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
 
-- `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
+-   `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
 
-- `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
+-   `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
 
 ```{r}
 
@@ -258,19 +259,19 @@ glimpse(sim_reads)
 
 The `simulate_depth_and_ad()` function leverages will generate a list with the following slots:
 
-- `$DP` [**stochastic**]: Data frame containing simulated sequence depth at each site $v$ per sample $n$. Thus, $\texttt{DP}_{nv} \sim \textrm{NB} (\mu_{nv} = \texttt{sample_factor}_n \times \texttt{site_factor}_v, \theta = \texttt{theta})$
+-   `$DP` [**stochastic**]: Data frame containing simulated sequence depth at each site $v$ per sample $n$. Thus, $\texttt{DP}_{nv} \sim \textrm{NB} (\mu_{nv} = \texttt{sample_factor}_n \times \texttt{site_factor}_v, \theta = \texttt{theta})$
 
-- `$AD` [**stochastic**]: Data frame containing simulated variant allele depth at each site $v$ per sample $n$. For samples without mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p = \texttt{error_rate})$. For samples bearing mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p \sim Beta(\alpha = \beta = \frac{1}{2}\texttt{site_conc}_{nv}))$
+-   `$AD` [**stochastic**]: Data frame containing simulated variant allele depth at each site $v$ per sample $n$. For samples without mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p = \texttt{error_rate})$. For samples bearing mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p \sim Beta(\alpha = \beta = \frac{1}{2}\texttt{site_conc}_{nv}))$
 
-- `$site_factor` [**stochastic**]: Vector containing scaling factors for each $v$ simulated loci; $\texttt{site_factor}_v \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \texttt{sigma_v}, a = \frac{\texttt{min_cov}}{\texttt{D_bar}}, b = \frac{\texttt{max_cov}}{\texttt{D_bar}})$
+-   `$site_factor` [**stochastic**]: Vector containing scaling factors for each $v$ simulated loci; $\texttt{site_factor}_v \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \texttt{sigma_v}, a = \frac{\texttt{min_cov}}{\texttt{D_bar}}, b = \frac{\texttt{max_cov}}{\texttt{D_bar}})$
 
-- `$sample_factor` [**stochastic**]: Vector containing scaling factors for each $n + 1$ sampled tips ($+1$ for the added outgroup); $\texttt{sample_factor}_n \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \sigma_v, \alpha = \frac{\texttt{min_cov}}{\bar{D}}, \beta = \infty)$
+-   `$sample_factor` [**stochastic**]: Vector containing scaling factors for each $n + 1$ sampled tips ($+1$ for the added outgroup); $\texttt{sample_factor}_n \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \sigma_v, \alpha = \frac{\texttt{min_cov}}{\bar{D}}, \beta = \infty)$
 
-- `$site_conc` [**stochastic**]: Vector containing symmetric beta distribution shape parameters used to simulate `$AD` at each $NV$ site; $\texttt{site_conc}_v \sim \Gamma_{tr}(\alpha = \texttt{site_conc_shape}, \beta = \texttt{site_conc_rate},a = \frac{(1 - \texttt{rho_max})}{\texttt{rho_max}},b = \infty)$
+-   `$site_conc` [**stochastic**]: Vector containing symmetric beta distribution shape parameters used to simulate `$AD` at each $NV$ site; $\texttt{site_conc}_v \sim \Gamma_{tr}(\alpha = \texttt{site_conc_shape}, \beta = \texttt{site_conc_rate},a = \frac{(1 - \texttt{rho_max})}{\texttt{rho_max}},b = \infty)$
 
-- `$site_rho` [**deterministic**]: Beta-binomial's $\rho$ parameter for each $v$ site; $\rho_{v} = \frac{1}{(1 + \texttt{site_conc}_v)}$
+-   `$site_rho` [**deterministic**]: Beta-binomial's $\rho$ parameter for each $v$ site; $\rho_{v} = \frac{1}{(1 + \texttt{site_conc}_v)}$
 
-- `$dropout` [**stochastic**]: Boolean vector for whether a sample $n$ experiences allelic dropout at site $v$.
+-   `$dropout` [**stochastic**]: Boolean vector for whether a sample $n$ experiences allelic dropout at site $v$.
 
 Below, we'll visualize the realized distribution of mean read depth across all sites and samples under the function's default parameters.
 
@@ -324,7 +325,7 @@ glimpse(sim_genotypes)
 
 ```
 
-Finally, we will sample sites from the human genome and assign these to the records held in `sim_genotypes`. These sites will then be threaded into a function to create a [VCF-like](https://gatk.broadinstitute.org/hc/en-us/articles/360035531692-VCF-Variant-Call-Format) data frame. Later, this VCF-like data structure will be exported as a VCF file that can be used as input for SCM. 
+Finally, we will sample sites from the human genome and assign these to the records held in `sim_genotypes`. These sites will then be threaded into a function to create a [VCF-like](https://gatk.broadinstitute.org/hc/en-us/articles/360035531692-VCF-Variant-Call-Format) data frame. Later, this VCF-like data structure will be exported as a VCF file that can be used as input for SCM.
 
 ```{r}
 
@@ -337,7 +338,7 @@ vcf_df <- build_vcf_df(G = mut_mat,
                        edges = mut_mat$edge,
                        mut_table = mut_table)
 
-head(vcf_df[, 1:11])
+head(vcf_df[, 1:11]) %>% knitr::kable()
 
 ```
 
@@ -348,7 +349,8 @@ Note that the VCF-like structure may contain some records with unobserved varian
 vcf_df %>% 
   filter(grepl(x = INFO, pattern = "AC=0")) %>%
   dplyr::select(1,2,4,5,8) %>%
-  head(n = 5)
+  head(n = 5) %>%
+  knitr::kable()
 
 ```
 
@@ -487,7 +489,8 @@ missing_mut_vcf <- vcf_df %>%
                values_to = "fmt_values") %>% 
   separate_wider_delim(cols = fmt_values,
                        delim = ":",
-                       names = c("GT", "DP", "AD", "GQ", "PL")) %>%
+                       names = c("GT", "DP", "AD", 
+                                 "GQ", "PL", "TG")) %>%
   filter(GT != "0/0")
 
 # Subset vcf_df to loci assigned to edges
@@ -500,7 +503,8 @@ assigned_mut_df <- vcf_df %>%
                values_to = "fmt_values") %>% 
   separate_wider_delim(cols = fmt_values,
                        delim = ":",
-                       names = c("GT", "DP", "AD", "GQ", "PL")) %>%
+                       names = c("GT", "DP", "AD", 
+                                 "GQ", "PL", "TG")) %>%
   filter(GT != "0/0")
 
 # Combine vcf subsets
@@ -588,7 +592,7 @@ gq.p <- wilcox.test(x = missing.gq,
 
 These plots show strong evidence that both `GQ` and `DP` scores stratify between mutations assigned and those missing from the tree. A Mann-Whitney U test for either quantity is statistically significant ($p=$ `r dp.p` and `r gq.p`, respectively). This conservative quality of SCM, while limiting the total precision of the inferred history relative to ground-truth, is nonetheless valuable for accuracy.
 
-Next, we assess concordance between the SCM-inferred origins for the mutations and compare to ground truth. To achieve this, we can measure whether each mutation shares the same bipartitions between the **ground truth** and **inferred** history. This approach leverages the function `compare_scm_edges()`, a wrapper for several other functions that computes the bipartitions for each `sim_tree` and `scm_tree` inputs, matches both topologies by these bipartitions, and computes the distance (in number of edges traversed) from the **inferred** edge to the **ground truth** edge.
+Next, we assess concordance between the SCM-inferred origins for the mutations and compare to ground truth. To achieve this, we can measure whether each mutation shares the same bipartitions between the **ground truth** and **inferred** history. This approach leverages the function `compare_scm_edges()`, a wrapper for several other functions that computes the bipartitions for each `sim_tree` and `scm_tree` inputs, matches both topologies by these bipartitions, and then computes the distance between the **inferred** edge(s) and the **ground truth** edge(s).
 
 ```{r, warning = FALSE, echo = FALSE}
 
@@ -601,44 +605,121 @@ edge_comp.df <- compare_scm_edges(vcf_df = vcf_df,
 
 # Subset to only mutations that have assignments and summarize concordance
 pcon <- edge_comp.df %>% 
-  filter(!is.na(as.integer(scm_assigned_edges))) %>%
+  filter(n_assigned > 0) %>%
   dplyr::select(locus, correct) %>%
-  mutate(locus = gsub(x = locus,
-                      pattern = "_", 
-                      replacement = ":")) %>%
   summarize(concordance = sum(correct)/n()) %>%
   pull(concordance)
 
-paste("Concordance between SCM-inferred and ground truth mutation origins:", round(pcon, 3))
+paste("Edge-mapping concordance:", round(pcon, 3))
 
 ```
 
-Below is a histogram of the distance between ground truth and SCM-inferred edges for all mis-mapped mutations:
+Here, we measure distance as a one-sided, nearest-neighbor sum from inferred edges to truth edges: $$
+\Delta(S,T) = \sum_{e \in S}\min_{t \in T}d(t,e),
+$$
+
+where $S = {e_1, \dots, e_k}$ is the set of SCM-inferred edges for a mutation and $T = t_1, \dots, t_m$ is the set of valid edges that can be assigned for a mutation. Since we use SCM to assign mutations to *edges*, not nodes, $d(\cdot,\cdot)$ is the **line-graph (edge-adjacency) distance**: the distance two edges would have as vertices of the tree's line graph, where two edges are adjacent (distance 1) exactly when they share an endpoint node. Concretely, for edges $e=(p_e,c_e)$ and $f=(p_f,c_f)$ (parent node, child node),
+
+$$
+d(e,f) = 1 + \min\big(d_{\text{node}}(p_e,p_f),\, d_{\text{node}}(p_e,c_f),\, d_{\text{node}}(c_e,p_f),\, d_{\text{node}}(c_e,c_f)\big), \quad e \neq f,
+$$
+
+with $d(e,e)=0$ and $d_{\text{node}}(\cdot,\cdot)$ the node-to-node edge-count distance. This makes sibling edges $d = 1$ apart rather than $2$, and an edge and its immediate parent edge $d = 1$ apart as well.
+
+To account for the tree topology in this metric (and bound the value $[0,1]$), we normalize by the tree's line-graph diameter $D$ -- the largest $d(e,f)$ between any two edges of the tree -- times the number of inferred edges. Thus,
+
+$$
+\Delta(S,T) = \frac{1}{|S|D}\sum_{e \in S}\min_{t \in T}d(t,e) \in [0,1].
+$$
+
+A value of $0$ reflects inference completely concordant with truth, and a value of $1$ corresponds to an inferred history as far as two edges can possibly be from one another (given the tree's topology).
+
+A visual example of this metric is provided below:
+
+```{r distance_demo, echo = FALSE}
+
+# sim random tree
+set.seed(SEED)
+tree <- ladderize(rtree(8))
+
+# deterministic varaibles
+node_dist <- node_edge_distances(tree)
+diameter <- line_graph_diameter(tree, node_dist)
+
+# truth/inferred
+truth_edge <- 4
+inferred_edge <- 11
+
+# compute dist
+raw_dist <- line_graph_distance(truth_edge, inferred_edge, tree, node_dist)
+norm_dist <- raw_dist / (length(inferred_edge) * diameter)
+
+# plot tree
+edge_key <- data.frame(node = tree$edge[, 2], edge_idx = seq_len(nrow(tree$edge)))
+edge_key$role <- "other"
+edge_key$role[edge_key$node == get_edge_descendant(tree, truth_edge)] <- "truth edge"
+edge_key$role[edge_key$node == get_edge_descendant(tree, inferred_edge)] <- "inferred edge"
+
+p <- ggtree(tree) %<+% edge_key +
+  aes(color = role, linewidth = role) +
+  geom_tiplab(color = "black", fontface = "italic") +
+  geom_text(aes(x = branch, label = edge_idx), color = "grey40", size = 3, vjust = -0.6) +
+  scale_color_manual(values = c("truth edge" = "firebrick",
+                                 "inferred edge" = "steelblue",
+                                 "other" = "grey75"),
+                      breaks = c("truth edge", "inferred edge")) +
+  scale_linewidth_manual(values = c("truth edge" = 2, "inferred edge" = 2, "other" = 0.6),
+                          guide = "none") +
+  labs(title = sprintf("edge distance = %d (norm. = %.2f)",
+                        raw_dist, norm_dist),
+       color = NULL) +
+  theme(legend.position = "bottom")
+
+p
+```
+
+Below is a histogram of these distance metrics for mutations with discordant mapping(s):
 
 ```{r, warning = FALSE, echo = FALSE}
 
 # Isolate mismapping variants
 incorrect.df <- edge_comp.df %>% 
-  filter(!is.na(as.integer(scm_assigned_edges))) %>%
+  filter(n_assigned > 0) %>%
   mutate(locus = gsub(x = locus,
                       pattern = "_", 
                       replacement = ":")) %>%
   filter(!correct)
 
 # Plot edge_distance for all mismapping mutations
-ggplot(incorrect.df,
-       aes(x = edge_distance)) +
+g1 <- ggplot(incorrect.df,
+       aes(x = d)) +
   geom_histogram(binwidth = 1,
                  fill = "gray",
                  color = "white") +
   theme_cowplot() +
-  scale_x_continuous(breaks = seq(0, 10, 1)) +
-  labs(x = "edge distance",
-       y = "count")
+  labs(x = "distance",
+       y = "mutations (count)")
+
+g2 <- ggplot(incorrect.df,
+       aes(x = dnorm)) +
+  geom_histogram(binwidth = 0.05,
+                 fill = "gray",
+                 color = "white") +
+  theme_cowplot() +
+  scale_x_continuous(breaks = seq(0, 1, 0.05)) +
+  labs(x = "normalized distance",
+       y = "mutations (count)")
+
+# output plot
+
+(g1 | g2) + 
+  plot_layout(axis_title = "collect")
 
 ```
 
-The major error-modality here appears to be low depth at a variant locus. For example, the variant at `chr10:7337951` is truly present in `r edge_bipartitions(tr_mol)[17]`. Upon examination, however, these are the VCF records for the samples that ought to have inherited the mutation:
+### False-positive reversion 
+
+A major error-modality here appears is low depth. For example, the variant at `chr10:7337951` is ought to be present in `r edge_bipartitions(tr_mol)[17]`, but SCM misplaces the mutation with a distance of $d =$ `r line_graph_distance(incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(true_edge) %>% as.integer(), incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(assigned_edge) %>% as.integer(),``tr_mol``, node_edge_distances(tr_mol))`. Upon examination, these VCF records show that low simulated depth is a likely driver of this observation:
 
 ```{r, echo = FALSE}
 
@@ -657,12 +738,14 @@ vcf_df %>%
   filter(sample %in% samples) %>%
   separate_wider_delim(cols = fmt_values,
                        delim = ":",
-                       names = c("GT", "DP", "AD", "GQ", "PL")) %>%
-  dplyr::select(sample, GT, DP, AD, GQ, PL)
+                       names = c("GT", "DP", "AD", 
+                                 "GQ", "PL", "TG")) %>%
+  dplyr::select(sample, GT, DP, AD, GQ, PL) %>%
+  knitr::kable()
 
 ```
 
-If we visualize the **true origin** of the mutation (blue) and compare to the **inferred origin**, the result is consistent with the sparse evidence in the VCF.
+If we visualize the **true origin** of the mutation (blue) and compare to the **inferred origin (red)**, the result is consistent with the sparse evidence in the VCF.
 
 ```{r, echo = FALSE}
 
@@ -670,7 +753,7 @@ If we visualize the **true origin** of the mutation (blue) and compare to the **
 plot.phylo(scm.tr, direction = "downwards", cex = 0.5)
 edgelabels(edge = incorrect.df %>%
              filter(locus == "chr10:7337951") %>%
-  pull(truth_edge_scm_numbering) %>%
+  pull(true_edge) %>%
   as.integer(),
     frame = "circle",
     bg = "blue",
@@ -678,12 +761,95 @@ edgelabels(edge = incorrect.df %>%
     cex = 0.5)
 edgelabels(edge = incorrect.df %>%
              filter(locus == "chr10:7337951") %>%
-  pull(scm_assigned_edges) %>%
+  pull(assigned_edge) %>%
   as.integer(),
     frame = "circle",
     bg = "red",
-    text = "",
+    text = "I",
     cex = 0.5)
+
+```
+
+If we aggregate across all mutations that were mismapped to a single branch (i.e., these are mutations with single origins and inferred to have a single origin, only misplaced relative to truth) and aggregate simulated sequence read information, we observe the following:
+
+```{r}
+
+# pull mismapped muts that map once to tree
+mismapped <- edge_comp.df %>% 
+  filter(!correct, n_assigned == 1) %>%
+  pull(locus) %>%
+  str_replace(pattern = "_", replacement = ":")
+
+# subset vcf data frame
+mismapped_vcf.df <- vcf_df %>% 
+  mutate(loc_id = paste0(CHROM,":",POS),
+         .before = 1) %>% 
+  filter(loc_id %in% mismapped) %>%
+  pivot_longer(cols = starts_with("s"), 
+               names_to = "sample", 
+               values_to = "fmt_values") %>% 
+  separate_wider_delim(cols = fmt_values,
+                       delim = ":",
+                       names = c("GT", "DP", "AD", 
+                                 "GQ", "PL", "TG")) %>%
+  filter(TG == 1)
+
+# plot genotyping distributions
+g.gq <- ggplot(mismapped_vcf.df %>% 
+         mutate(geno_call = case_when(GT == "0/1" ~ "correct",
+                                      TRUE ~ "incorrect")),
+       aes(x = as.integer(GQ),
+           fill = geno_call)) +
+  geom_histogram(position = "dodge", aes(y = after_stat(ncount))) +
+  scale_fill_npg() +
+  theme_cowplot() +
+  labs(x = "GQ",
+       y = "samples (prop.)",
+       fill = "genotype call")
+
+g.dp <- ggplot(mismapped_vcf.df %>% 
+         mutate(geno_call = case_when(GT == "0/1" ~ "correct",
+                                      TRUE ~ "incorrect")),
+       aes(x = as.integer(DP),
+           fill = geno_call)) +
+  geom_histogram(position = "dodge", aes(y = after_stat(ncount))) +
+  scale_fill_npg() +
+  theme_cowplot() +
+  labs(x = "DP",
+       y = "samples (prop.)",
+       fill = "genotype call")
+
+(g.dp | g.gq) + 
+  plot_layout(axis_titles = "collect", 
+              axes = "collect", 
+              guides = "collect") &
+  theme(legend.position = "top")
+```
+
+### Effect of branch length
+
+```{r, warning = FALSE}
+
+# Read cellphy tree
+cellphy.tr <- read.tree(file = "test_sim/test_sim.viol.raxml.bestTree")
+
+# Proportion correct as a function of edge length
+edge_comp.df %>%
+  mutate(len = cellphy.tr$edge.length[as.integer(true_edge)],
+         percentile = ntile(len, 100)) %>%
+  group_by(percentile, correct) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = correct,
+              values_from = n,
+              names_prefix = "assignment_",
+              values_fill = 0) %>%
+  mutate(accuracy = assignment_TRUE / (assignment_TRUE + assignment_FALSE)) %>%
+  ggplot(aes(x = percentile, y = accuracy)) +
+  geom_line() +
+  geom_point() +
+  theme_cowplot() +
+  labs(x = "edge length percentile",
+       y = "mutation-assignment accuracy")
 
 ```
 

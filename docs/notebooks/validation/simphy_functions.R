@@ -122,6 +122,41 @@ edge_distance <- function(edge_i, edge_j, tree, node_dist = NULL) {
   node_dist[get_edge_descendant(tree, edge_i), get_edge_descendant(tree, edge_j)]
 }
 
+# Line-graph (edge-adjacency) distance between two edges of `tree`: the
+# distance they'd have as vertices of the tree's line graph, where two edges
+# are adjacent (distance 1) iff they share an endpoint node. Unlike
+# edge_distance() -- which is 2 for sibling edges, since it goes through
+# their shared parent's node -- this is 1 for siblings, and also 1 between
+# an edge and its parent edge, matching how "close" two edges actually are
+# as candidate mutation placements rather than how far apart their
+# descendant nodes happen to be.
+#
+# For edges e = (pe, ce) and f = (pf, cf) (parent node, child node), this is
+#   1 + min(d(pe,pf), d(pe,cf), d(ce,pf), d(ce,cf))
+# -- the minimum node distance across all four endpoint pairings, plus one.
+# Whenever e and f share a node, that shared node contributes a distance-0
+# pairing to the min, correctly collapsing the formula to 1.
+line_graph_distance <- function(edge_i, edge_j, tree, node_dist = NULL) {
+  if (edge_i == edge_j) return(0L)
+  if (is.null(node_dist)) node_dist <- node_edge_distances(tree)
+  pe <- tree$edge[edge_i, 1]; ce <- tree$edge[edge_i, 2]
+  pf <- tree$edge[edge_j, 1]; cf <- tree$edge[edge_j, 2]
+  1 + min(node_dist[pe, pf], node_dist[pe, cf], node_dist[ce, pf], node_dist[ce, cf])
+}
+
+# Line-graph diameter of `tree`: the largest line_graph_distance() between
+# any two distinct edges -- the normalizing bound for line-graph-based edge
+# placement error, analogous to max(node_edge_distances(tree)) for
+# edge_distance(). Vectorized over all edge pairs at once (rather than
+# calling line_graph_distance() pairwise) since it's computed once per tree.
+line_graph_diameter <- function(tree, node_dist = NULL) {
+  if (is.null(node_dist)) node_dist <- node_edge_distances(tree)
+  pe <- tree$edge[, 1]; ce <- tree$edge[, 2]
+  min_d <- pmin(node_dist[pe, pe], node_dist[pe, ce], node_dist[ce, pe], node_dist[ce, ce])
+  diag(min_d) <- NA
+  max(min_d, na.rm = TRUE) + 1
+}
+
 # Read every locus's SCM-assigned edge(s) straight out of a multi_scm() h5
 # output file.
 #
@@ -207,11 +242,19 @@ read_assigned_edges <- function(h5f_path) {
 #     proceeds against that subset)
 # `edge_distance`/`correct` are NA/FALSE when there's a full topology
 # mismatch or SCM assigned zero edges (nothing to measure against).
-compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1) {
+compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1, full_df = FALSE) {
 
   sim_keys <- edge_bipartitions(sim_tree)
   scm_keys <- edge_bipartitions(scm_tree)
   scm_node_dist <- node_edge_distances(scm_tree)
+  ## scm_tree's line-graph diameter (longest edge-to-edge distance, treating
+  ## edges rather than nodes as the objects being compared -- see
+  ## line_graph_distance()) is the largest value line_graph_distance() can
+  ## ever return for this tree -- dividing by it turns a raw edge-adjacency
+  ## count into a size/shape-invariant [0, 1] index, so error rates stay
+  ## comparable across trees with different numbers of tips or different
+  ## depths.
+  scm_diameter <- line_graph_diameter(scm_tree, scm_node_dist)
 
   locus <- paste(vcf_df$CHROM, vcf_df$POS, sep = "_")
   ## EDGE= holds one or more comma-separated origins (see
@@ -239,25 +282,55 @@ compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1) {
     scm_str <- assigned$scm_assigned_edges[assigned$locus == loc]
     scm_idx <- if (nzchar(scm_str)) as.integer(strsplit(scm_str, ",")[[1]]) else integer(0)
 
+    ## Each inferred edge is charged the line-graph distance (see
+    ## line_graph_distance()) to its single closest truth edge, then those
+    ## per-inferred-edge distances are summed -- so a multi-edge assignment
+    ## only reads as "correct" (distance 0) if every inferred edge lands on
+    ## a truth edge, not just one of several. Line-graph distance is used
+    ## rather than node-based edge_distance() because SCM assigns mutations
+    ## to edges, not nodes -- e.g. a sibling edge is genuinely "one step"
+    ## away from the true edge, not two.
     edge_dist <- if (length(truth_scm_valid) == 0 || length(scm_idx) == 0) {
       NA_integer_
     } else {
-      min(vapply(scm_idx, function(e) {
-        min(vapply(truth_scm_valid, function(t) edge_distance(t, e, scm_tree, scm_node_dist),
+      sum(vapply(scm_idx, function(e) {
+        min(vapply(truth_scm_valid, function(t) line_graph_distance(t, e, scm_tree, scm_node_dist),
                    numeric(1)))
       }, numeric(1)))
     }
 
-    data.frame(
-      locus                    = loc,
-      truth_edge_sim_numbering = paste(truth_idx, collapse = ","),
-      truth_edge_scm_numbering = paste(truth_scm_idx, collapse = ","),
-      scm_assigned_edges       = paste(scm_idx, collapse = ","),
-      topology_mismatch        = length(truth_scm_valid) == 0,
-      correct                  = length(scm_idx) == 1 && scm_idx %in% truth_scm_valid,
-      edge_distance            = edge_dist,
-      stringsAsFactors = FALSE
-    )
+    ## Average, per assigned edge, what fraction of the tree's diameter it
+    ## missed by -- 0 means every inferred edge landed exactly on a truth
+    ## edge, 1 means each inferred edge is as far as two nodes can possibly
+    ## be on this tree.
+    edge_distance_normalized <- edge_dist / (length(scm_idx) * scm_diameter)
+
+    if (full_df) {
+      data.frame(
+        locus                     = loc,
+        truth_edge_sim_numbering  = paste(truth_idx, collapse = ","),
+        truth_edge_scm_numbering  = paste(truth_scm_idx, collapse = ","),
+        scm_assigned_edges        = paste(scm_idx, collapse = ","),
+        n_edges_assigned          = length(scm_idx),
+        topology_mismatch         = length(truth_scm_valid) == 0,
+        correct                   = length(scm_idx) == 1 && scm_idx %in% truth_scm_valid,
+        edge_distance             = edge_dist,
+        edge_distance_normalized  = edge_distance_normalized,
+        stringsAsFactors = FALSE
+      )
+    } else {
+      data.frame(
+        locus                     = loc,
+        true_edge                 = paste(truth_scm_idx, collapse = ","),
+        assigned_edge             = paste(scm_idx, collapse = ","),
+        n_assigned                = length(scm_idx),
+        correct                   = length(scm_idx) == 1 && scm_idx %in% truth_scm_valid,
+        d                         = edge_dist,
+        dnorm                     = edge_distance_normalized,
+        stringsAsFactors          = FALSE
+      )
+    }
+
   }, mc.cores = cores) %>% dplyr::bind_rows()
 }
 
@@ -712,6 +785,14 @@ build_vcf_df <- function(G, DP, AD, gl, edges, mut_table,
   G <- G[, !colnames(G) %in% MUT_META_COLS, drop = FALSE]  # keep only sample columns
 
   sample_names <- colnames(G)
+  ## G's sample columns are already exactly the ground-truth presence (0/1)
+  ## matrix create_mut_df()/introduce_ism_violations() build -- whether a
+  ## sample truly descends from an edge bearing the mutation -- independent
+  ## of whatever simulate_GQ_PL_GT() happens to call from noisy reads. Carry
+  ## it into the VCF as its own FORMAT field (TG) so truth vs. observed
+  ## genotype can be compared directly per sample, e.g. to catch cases like
+  ## a heterozygous truth call that reads as 1/1 due to allelic dropout.
+  G_truth <- as.matrix(G)
 
   n_mut  <- nrow(mut_table)
   n_samp <- ncol(gl$GT)
@@ -719,10 +800,11 @@ build_vcf_df <- function(G, DP, AD, gl, edges, mut_table,
             length(sample_names) == n_samp, length(edges) == n_mut)
 
   fmt_flat <- sprintf(
-    "%s:%d:%d,%d:%d:%d,%d,%d",
+    "%s:%d:%d,%d:%d:%d,%d,%d:%d",
     gl$GT, DP, DP - AD, AD,
     gl$GQ,
-    gl$PL0, gl$PL1, gl$PL2
+    gl$PL0, gl$PL1, gl$PL2,
+    G_truth
   )
   fmt_mat <- matrix(fmt_flat, nrow = n_mut, ncol = n_samp)
   colnames(fmt_mat) <- sample_names
@@ -746,7 +828,7 @@ build_vcf_df <- function(G, DP, AD, gl, edges, mut_table,
     FILTER = filter,
     INFO   = sprintf("AC=%d;AF=%.6g;EDGE=%s;DRIVER=%d;S=%.6g;ISM_VIOL=%d;N_ORIGINS=%d",
                      AC, AF, edges, driver_flag, sel_coef_out, ism_viol_flag, n_origins),
-    FORMAT = "GT:DP:AD:GQ:PL",
+    FORMAT = "GT:DP:AD:GQ:PL:TG",
     stringsAsFactors = FALSE
   )
 
@@ -800,7 +882,8 @@ write_vcf_df <- function(vcf_df, file, tree,
     '##FORMAT=<ID=DP,Number=1,Type=Integer,Description="Read depth">',
     '##FORMAT=<ID=AD,Number=R,Type=Integer,Description="Allelic depths for the ref and alt alleles">',
     '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality">',
-    '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled genotype likelihoods">'
+    '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled genotype likelihoods">',
+    '##FORMAT=<ID=TG,Number=1,Type=Integer,Description="Ground-truth mutation presence (1) or absence (0) for this sample under the simulated tree, independent of the observed/called GT">'
   )
 
   if (sort) {
