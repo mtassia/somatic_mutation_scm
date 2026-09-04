@@ -58,10 +58,9 @@ get_phylo_object <- function(simpop) {
   tr
 }
 
-# Get the node descendant of an edge
+# Get the node descendant of an edge (or of each edge in a vector of them)
 get_edge_descendant <- function(phylo, edge_index) {
-  edge <- phylo$edge[edge_index, ]
-  edge[2]
+  phylo$edge[edge_index, 2]
 }
 
 # Get all tips descendant from a node
@@ -155,6 +154,47 @@ line_graph_diameter <- function(tree, node_dist = NULL) {
   min_d <- pmin(node_dist[pe, pe], node_dist[pe, ce], node_dist[ce, pe], node_dist[ce, ce])
   diag(min_d) <- NA
   max(min_d, na.rm = TRUE) + 1
+}
+
+# Exact transition-probability matrix P(v) = exp(Q*v) 
+transition_prob_matrix <- function(Q, v) {
+  as.matrix(expm::expm(Q * v))
+}
+
+# Resolve a state argument given either as its integer row/col index into
+# Q, or as a row/col name (e.g. "AG"); assumes Q's rownames and colnames
+# use the same state ordering.
+resolve_state_index <- function(Q, state) {
+  if (is.character(state)) {
+    idx <- match(state, rownames(Q))
+    if (is.na(idx)) stop(sprintf("state '%s' not found in rownames(Q)", state))
+    return(idx)
+  }
+  state
+}
+
+# Exact probability that a character starting in state `i` has undergone
+# at least one change by branch length `v`: 1 minus the probability of
+# remaining in `i`.
+prob_state_change <- function(Q, i, v) {
+  i <- resolve_state_index(Q, i)
+  1 - transition_prob_matrix(Q, v)[i, i]
+}
+
+# Simulate the state reached after evolving for total time `v` from state
+# `i` under `Q`.
+simulate_state_at_time <- function(Q, i, v) {
+  state <- resolve_state_index(Q, i)
+  r <- v
+  n <- nrow(Q)
+  repeat {
+    lambda <- -Q[state, state]
+    t <- if (lambda > 0) -log(runif(1)) / lambda else Inf
+    if (t > r) return(state)
+    jump_probs <- Q[state, -state] / lambda
+    state <- (seq_len(n))[-state][sample.int(n - 1, 1, prob = jump_probs)]
+    r <- r - t
+  }
 }
 
 # Read every locus's SCM-assigned edge(s) straight out of a multi_scm() h5

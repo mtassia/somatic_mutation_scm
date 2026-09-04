@@ -338,7 +338,7 @@ vcf_df <- build_vcf_df(G = mut_mat,
                        edges = mut_mat$edge,
                        mut_table = mut_table)
 
-head(vcf_df[, 1:11]) %>% knitr::kable()
+glimpse(head(vcf_df,1)[1:11])
 
 ```
 
@@ -456,7 +456,7 @@ g <- ggplot(data.frame(i = 1:length(edge_diff),
 
 With the edge-wise summary above, we see that SCM *underestimates* edge lengths relative to ground truth. Underestimation may be due to either a preponderance of mutations that lack sufficient evidence to be assigned to the phylogeny **at all**, or mutations that are assigned to incorrect branches.
 
-## Sources of error
+## Quantifying error
 
 We first explore mutations that are not assigned at all to the phylogeny:
 
@@ -629,7 +629,7 @@ with $d(e,e)=0$ and $d_{\text{node}}(\cdot,\cdot)$ the node-to-node edge-count d
 To account for the tree topology in this metric (and bound the value $[0,1]$), we normalize by the tree's line-graph diameter $D$ -- the largest $d(e,f)$ between any two edges of the tree -- times the number of inferred edges. Thus,
 
 $$
-\Delta(S,T) = \frac{1}{|S|D}\sum_{e \in S}\min_{t \in T}d(t,e) \in [0,1].
+\Delta_{norm}(S,T) = \frac{1}{|S| \times D}\sum_{e \in S}\min_{t \in T}d(t,e) \in [0,1].
 $$
 
 A value of $0$ reflects inference completely concordant with truth, and a value of $1$ corresponds to an inferred history as far as two edges can possibly be from one another (given the tree's topology).
@@ -647,18 +647,28 @@ node_dist <- node_edge_distances(tree)
 diameter <- line_graph_diameter(tree, node_dist)
 
 # truth/inferred
-truth_edge <- 4
-inferred_edge <- 11
+truth_edge <- c(8, 9)
+inferred_edge <- c(8, 11)
 
-# compute dist
-raw_dist <- line_graph_distance(truth_edge, inferred_edge, tree, node_dist)
+# compute dist: for each inferred edge, distance to its single closest
+# truth edge, summed across all inferred edges (same aggregation
+# compare_scm_edges() uses)
+per_edge_dist <- sapply(inferred_edge, function(e) {
+  min(sapply(truth_edge, function(t) line_graph_distance(t, e, tree, node_dist)))
+})
+raw_dist <- sum(per_edge_dist)
 norm_dist <- raw_dist / (length(inferred_edge) * diameter)
 
-# plot tree
+# plot tree -- an edge in both truth_edge and inferred_edge (a correct
+# match) gets its own category so it isn't masked by whichever assignment
+# happens to run last
 edge_key <- data.frame(node = tree$edge[, 2], edge_idx = seq_len(nrow(tree$edge)))
+is_truth <- edge_key$node %in% get_edge_descendant(tree, truth_edge)
+is_inferred <- edge_key$node %in% get_edge_descendant(tree, inferred_edge)
 edge_key$role <- "other"
-edge_key$role[edge_key$node == get_edge_descendant(tree, truth_edge)] <- "truth edge"
-edge_key$role[edge_key$node == get_edge_descendant(tree, inferred_edge)] <- "inferred edge"
+edge_key$role[is_truth] <- "truth edge"
+edge_key$role[is_inferred] <- "inferred edge"
+edge_key$role[is_truth & is_inferred] <- "correct match"
 
 p <- ggtree(tree) %<+% edge_key +
   aes(color = role, linewidth = role) +
@@ -666,9 +676,11 @@ p <- ggtree(tree) %<+% edge_key +
   geom_text(aes(x = branch, label = edge_idx), color = "grey40", size = 3, vjust = -0.6) +
   scale_color_manual(values = c("truth edge" = "firebrick",
                                  "inferred edge" = "steelblue",
+                                 "correct match" = "seagreen",
                                  "other" = "grey75"),
-                      breaks = c("truth edge", "inferred edge")) +
-  scale_linewidth_manual(values = c("truth edge" = 2, "inferred edge" = 2, "other" = 0.6),
+                      breaks = c("truth edge", "inferred edge", "correct match")) +
+  scale_linewidth_manual(values = c("truth edge" = 2, "inferred edge" = 2,
+                                     "correct match" = 2, "other" = 0.6),
                           guide = "none") +
   labs(title = sprintf("edge distance = %d (norm. = %.2f)",
                         raw_dist, norm_dist),
@@ -697,7 +709,7 @@ g1 <- ggplot(incorrect.df,
                  fill = "gray",
                  color = "white") +
   theme_cowplot() +
-  labs(x = "distance",
+  labs(x = expression(Delta),
        y = "mutations (count)")
 
 g2 <- ggplot(incorrect.df,
@@ -707,7 +719,7 @@ g2 <- ggplot(incorrect.df,
                  color = "white") +
   theme_cowplot() +
   scale_x_continuous(breaks = seq(0, 1, 0.05)) +
-  labs(x = "normalized distance",
+  labs(x = expression(Delta[norm]),
        y = "mutations (count)")
 
 # output plot
@@ -717,9 +729,9 @@ g2 <- ggplot(incorrect.df,
 
 ```
 
-### False-positive reversion
+### Placement error for ISM mutations
 
-A major error-modality here appears is low depth. For example, the variant at `chr10:7337951` is ought to be present in `r edge_bipartitions(tr_mol)[17]`, but SCM misplaces the mutation with a distance of $d =$ ``` r line_graph_distance(incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(true_edge) %>% as.integer(), incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(assigned_edge) %>% as.integer(),``tr_mol``, node_edge_distances(tr_mol)) ```. Upon examination, these VCF records show that low simulated depth is a likely driver of this observation:
+A major error-modality here appears is low depth. For example, the variant at `chr10:7337951` is ought to be present in `r edge_bipartitions(tr_mol)[17]`, but SCM misplaces the mutation with a distance, $d$, of ``` r line_graph_distance(incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(true_edge) %>% as.integer(), incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(assigned_edge) %>% as.integer(),``tr_mol``, node_edge_distances(tr_mol)) ```. Upon examination, these VCF records show that low simulated depth is a likely driver of this observation:
 
 ```{r false-positive-example-table, echo = FALSE, warning = FALSE, message = FALSE}
 
@@ -826,12 +838,100 @@ g.dp <- ggplot(mismapped_vcf.df %>%
   theme(legend.position = "top")
 ```
 
+This observation motivates stringent filtering at the scale of genotype quality.
+
+### False-positive ISM violations
+
+If we stratify all the incorrectly mapping variants by the number of edges that they map to, we see that some false-positive ISM violations are recovered with SCM:
+
+```{r false-positive-ism-viol, warning = FALSE, echo = FALSE}
+
+# Isolate all mismapping variants
+incorrect.df <- edge_comp.df %>% 
+  filter(!correct) %>%
+  mutate(locus = gsub(x = locus,
+                      pattern = "_", 
+                      replacement = ":"),
+         error_class = case_when(n_assigned == 0 ~ factor("unmapped"),
+                                 n_assigned == 1 ~ factor("mismapped"),
+                                 n_assigned > 1 ~ factor("multimapped")))
+
+max_d <- max(incorrect.df$d, na.rm = TRUE)
+
+# Plot edge_distance for all mismapping mutations
+incorrect.df %>%
+  mutate(d_plot = ifelse(is.na(d), max_d + 1, d)) %>%
+  ggplot(aes(x = d_plot, fill = error_class)) +
+  geom_histogram(binwidth = 1, color = "white") +
+  scale_fill_npg() + 
+  scale_x_continuous(
+    breaks = c(seq(0, max_d, 1), max_d + 1),
+    labels = c(seq(0, max_d, 1), "NA")
+  ) +
+  scale_y_log10() +
+  theme_cowplot() +
+  theme(legend.title = element_blank(),
+                legend.position = "top") +
+  labs(y = "mutations (count)",
+       x = expression(Delta),
+       fill = "error class")
+```
+
+If we isolate only the multimapping mutations (i.e., false-positive ISM violations):
+
+```{r}
+
+incorrect.df %>%
+  filter(n_assigned > 1) %>% 
+  knitr::kable()
+
+```
+
 ### Effect of branch length
 
-```{r branch-length-accuracy, warning = FALSE, message = FALSE, echo = FALSE}
+As SCM simulates genotype evolution according to a continuous-time Markov chain modeled as a Poisson process, the probability that a mutation occurs along an edge and that edge's length are exponentially related where,
 
-# Read cellphy tree
-cellphy.tr <- read.tree(file = "test_sim/test_sim.viol.raxml.bestTree")
+$$
+f(t) = \lambda e^{\lambda t}, ~~~ \lambda = -q_{ii}.
+$$
+
+In this context, $t$ is the edge length (measured in molecular time: substitutions per site) and $-q_{ii}$ is the diagonal element of the genotype substitution matrix $Q$ in state $i$. This example is pulled directly from equation 4 in [Bollback et al. 2006](https://pmc.ncbi.nlm.nih.gov/articles/PMC1403802/). Because we only simulate mutations that transition unphased genotypes from homozygous to heterozygous states, we will plot the relationship between edge length and the unconditional state transition probability for [A/A, C/C, G/G, T/T] below:
+
+```{r prob-change-vs-branch-length, warning = FALSE, echo = FALSE}
+
+# Read cellphy tree 
+cellphy.tr <- read.tree("test_sim/test_sim.raxml.bestTree")
+branch_lengths <- seq(0, max(cellphy.tr$edge.length), length.out = 100)
+
+# Read Q matrix
+Q <- read_cellphy_model("test_sim/test_sim.raxml.bestModel")
+states <- rownames(Q)
+
+# One matrix exponential per branch length
+p_change_df <- lapply(branch_lengths, function(v) {
+  Pv <- transition_prob_matrix(Q, v)
+  data.frame(state = states, v = v, p_change = 1 - diag(Pv))
+}) %>% 
+  bind_rows() %>%
+  filter(state %in% c("AA","CC","GG","TT"))
+
+# Plot unconditional state-transition probabilities for homozygous states
+ggplot(p_change_df, aes(x = v, 
+                        y = p_change, 
+                        color = state)) +
+  geom_line(linewidth = 1) +
+  scale_color_npg(guide = 'none') +
+  theme_cowplot() +
+  theme(strip.background = element_blank(),
+        aspect.ratio = 1) +
+  labs(x = "branch length (subs/site)",
+       y = "P(state change)")
+
+```
+
+However, when we plot the relationship between mapping accuracy and edge length, we see relatively stable performance – this will require further validation across a larger posterior distribution of simulations.
+
+```{r branch-length-accuracy, warning = FALSE, message = FALSE, echo = FALSE}
 
 # Proportion correct as a function of edge length
 edge_comp.df %>%
