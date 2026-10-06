@@ -1,5 +1,5 @@
 .RData
-.RDataTmp
+.RDataTmp*
 .Rhistory
 .Rproj.user
 test_sim/
@@ -7,3 +7,4 @@ test_sim/
 *.aux
 *.tex
 *.log
+*nb.html

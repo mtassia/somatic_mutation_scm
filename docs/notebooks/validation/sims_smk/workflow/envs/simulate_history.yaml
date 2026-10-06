@@ -1,0 +1,27 @@
+name: simulate_history
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - r-base>=4.3
+  - compilers
+  - make
+  - r-remotes
+  - r-optparse
+  - r-tidyverse
+  - r-ape
+  - r-phytools
+  - r-truncdist
+  - r-treedist
+  - r-cowplot
+  - r-ggsci
+  - r-pbmcapply 
+  - r-expm  
+  - bioconductor-ggtree
+  - bioconductor-genomicranges
+  - bioconductor-genomeinfodb
+  - bioconductor-rtracklayer # reads the accessibility-mask BED
+  - bioconductor-bsgenome.hsapiens.ucsc.hg38   # reference for sample_mutation_loci() (large download)
+  - r-data.table
+  - r-scales
+  - r-rcolorbrewer

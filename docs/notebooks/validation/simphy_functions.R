@@ -18,19 +18,17 @@ genGammaFitness <- function(shape = 0.47, rate = 34, seed = NULL) {
   function() rgamma(n = 1, shape = shape, rate = rate)
 }
 
-# Generate n random hex hash strings (nchar characters each), for use as
-# opaque per-mutation IDs. At nchar = 12 the collision probability is
-# negligible for any realistic number of mutations.
+# Generate n random hex hash strings (nchar characters each), for use as mutation IDs. 
 random_hash <- function(n, nchar = 12) {
   hex <- c(0:9, letters[1:6])
   apply(matrix(sample(hex, n * nchar, replace = TRUE), nrow = n), 1, paste, collapse = "")
 }
 
-# Combine a driver-event table (as in simpop$events -- node/timing) and a
-# driver->fitness lookup (as in simpop$cfg$drivers) into a single data
+# Combine a driver-event table (i.e.,), simpop$events) and a
+# driver -> fitness lookup (i.e., simpop$cfg$drivers) into a single data
 # frame. Returns NULL if either input is NULL (e.g. a tree that didn't
 # originate from run_driver_process_sim()). Called once by get_phylo_object()
-# and stashed as tree$driver_info.
+# and stored as tree$driver_info.
 get_driver_info <- function(events, driver_fitness) {
   if (is.null(events) || is.null(driver_fitness)) return(NULL)
 
@@ -89,10 +87,8 @@ edge_bipartitions <- function(tree) {
 }
 
 # Translate an edge index from `from_tree`'s numbering into the
-# corresponding edge index in `to_tree`'s numbering, by matching descendant
-# tip-sets (bipartitions) rather than raw row position. Returns NA if no
-# edge in `to_tree` has the same descendant tip-set (a real topological
-# mismatch, e.g. if `to_tree` is an inferred rather than the true tree).
+# corresponding edge index in `to_tree`'s numbering, by matching bipartitions. 
+# Returns NA if no edge in `to_tree` has the same descendant tip-set.
 # `from_keys`/`to_keys` are the precomputed output of edge_bipartitions().
 translate_edge_index <- function(edge_idx, from_keys, to_keys) {
   target_key <- from_keys[as.character(edge_idx)]
@@ -101,10 +97,7 @@ translate_edge_index <- function(edge_idx, from_keys, to_keys) {
   as.integer(match_idx)
 }
 
-# Precompute all-pairs node distances (in edge count, not branch length) for
-# a tree, for fast repeated edge_distance() lookups. Achieved by running
-# ape::dist.nodes() (patristic distance) on a copy of the tree with every
-# branch length set to 1, turning it into a pure edge-count distance.
+# Precompute all-pairs node distances (in edge count, not branch length).
 node_edge_distances <- function(tree) {
   unit_tree <- tree
   unit_tree$edge.length <- rep(1, nrow(tree$edge))
@@ -112,29 +105,18 @@ node_edge_distances <- function(tree) {
 }
 
 # Topological distance (in number of edges) between two edges of `tree`,
-# defined as the edge-count distance between their child/descendant nodes
-# (two edges sharing a parent -- siblings -- are 2 apart: child -> parent ->
-# child). Pass a precomputed node_edge_distances() matrix via `node_dist` to
+# defined as the edge-count distance between their child nodes. 
+# Pass a precomputed node_edge_distances() matrix via `node_dist` to
 # avoid recomputing it on every call.
 edge_distance <- function(edge_i, edge_j, tree, node_dist = NULL) {
   if (is.null(node_dist)) node_dist <- node_edge_distances(tree)
   node_dist[get_edge_descendant(tree, edge_i), get_edge_descendant(tree, edge_j)]
 }
 
-# Line-graph (edge-adjacency) distance between two edges of `tree`: the
-# distance they'd have as vertices of the tree's line graph, where two edges
-# are adjacent (distance 1) iff they share an endpoint node. Unlike
+# Line-graph (edge-adjacency) distance between two edges of `tree`. Unlike
 # edge_distance() -- which is 2 for sibling edges, since it goes through
 # their shared parent's node -- this is 1 for siblings, and also 1 between
-# an edge and its parent edge, matching how "close" two edges actually are
-# as candidate mutation placements rather than how far apart their
-# descendant nodes happen to be.
-#
-# For edges e = (pe, ce) and f = (pf, cf) (parent node, child node), this is
-#   1 + min(d(pe,pf), d(pe,cf), d(ce,pf), d(ce,cf))
-# -- the minimum node distance across all four endpoint pairings, plus one.
-# Whenever e and f share a node, that shared node contributes a distance-0
-# pairing to the min, correctly collapsing the formula to 1.
+# an edge and its parent edge.
 line_graph_distance <- function(edge_i, edge_j, tree, node_dist = NULL) {
   if (edge_i == edge_j) return(0L)
   if (is.null(node_dist)) node_dist <- node_edge_distances(tree)
@@ -144,10 +126,7 @@ line_graph_distance <- function(edge_i, edge_j, tree, node_dist = NULL) {
 }
 
 # Line-graph diameter of `tree`: the largest line_graph_distance() between
-# any two distinct edges -- the normalizing bound for line-graph-based edge
-# placement error, analogous to max(node_edge_distances(tree)) for
-# edge_distance(). Vectorized over all edge pairs at once (rather than
-# calling line_graph_distance() pairwise) since it's computed once per tree.
+# any two distinct edges.
 line_graph_diameter <- function(tree, node_dist = NULL) {
   if (is.null(node_dist)) node_dist <- node_edge_distances(tree)
   pe <- tree$edge[, 1]; ce <- tree$edge[, 2]
@@ -161,73 +140,36 @@ transition_prob_matrix <- function(Q, v) {
   as.matrix(expm::expm(Q * v))
 }
 
-# Resolve a state argument given either as its integer row/col index into
-# Q, or as a row/col name (e.g. "AG"); assumes Q's rownames and colnames
-# use the same state ordering.
-resolve_state_index <- function(Q, state) {
-  if (is.character(state)) {
-    idx <- match(state, rownames(Q))
-    if (is.na(idx)) stop(sprintf("state '%s' not found in rownames(Q)", state))
-    return(idx)
-  }
-  state
-}
-
-# Exact probability that a character starting in state `i` has undergone
-# at least one change by branch length `v`: 1 minus the probability of
-# remaining in `i`.
-prob_state_change <- function(Q, i, v) {
-  i <- resolve_state_index(Q, i)
-  1 - transition_prob_matrix(Q, v)[i, i]
-}
-
-# Simulate the state reached after evolving for total time `v` from state
-# `i` under `Q`.
-simulate_state_at_time <- function(Q, i, v) {
-  state <- resolve_state_index(Q, i)
-  r <- v
-  n <- nrow(Q)
-  repeat {
-    lambda <- -Q[state, state]
-    t <- if (lambda > 0) -log(runif(1)) / lambda else Inf
-    if (t > r) return(state)
-    jump_probs <- Q[state, -state] / lambda
-    state <- (seq_len(n))[-state][sample.int(n - 1, 1, prob = jump_probs)]
-    r <- r - t
-  }
-}
-
 # Read every locus's SCM-assigned edge(s) straight out of a multi_scm() h5
 # output file.
-#
-# Works on both h5 layouts this pipeline produces: the flat
-# /assigned_edges/<locus> structure multi_scm() itself writes (e.g. the
-# per-chromosome results/{sample}.{chrom}.h5 files from the scm_chromosome
-# rule), and the chromosome-nested /<chrom>/assigned_edges/<locus>
-# structure produced by merge_h5_files() (results/merged/{sample}.h5, the
-# pipeline's actual final output -- the per-chromosome files are marked
-# temp() and normally won't exist on disk once merge_h5 has run).
 #
 # RETURNS: data.frame, one row per locus found in the h5 file, with
 # `scm_assigned_edges` (comma-separated if SCM placed more than one state
 # change for that locus) and `n_edges_assigned`.
 read_assigned_edges <- function(h5f_path) {
 
-  ## Find every assigned_edges group regardless of nesting depth, and map
-  ## each locus to the full h5 path of its dataset.
-  h5_contents <- rhdf5::h5ls(h5f_path, recursive = TRUE)
-  ae_groups   <- h5_contents %>%
-    dplyr::filter(basename(group) == "assigned_edges")
+  fid <- rhdf5::H5Fopen(h5f_path, flags = "H5F_ACC_RDONLY")
+  on.exit(rhdf5::H5Fclose(fid), add = TRUE)
+
+  shallow   <- rhdf5::h5ls(fid, recursive = 2)
+  ae_groups <- shallow %>%
+    dplyr::filter(name == "assigned_edges", otype == "H5I_GROUP") %>%
+    dplyr::mutate(path = paste0(ifelse(group == "/", "", group), "/", name))
 
   if (nrow(ae_groups) == 0) {
     warning("No assigned_edges group found in this h5 file.")
     return(data.frame())
   }
 
-  loc_paths <- setNames(paste0(ae_groups$group, "/", ae_groups$name), ae_groups$name)
+  loc_paths <- lapply(ae_groups$path, function(grp_path) {
+    grp <- rhdf5::H5Gopen(fid, grp_path)
+    on.exit(rhdf5::H5Gclose(grp), add = TRUE)
+    loci <- rhdf5::h5ls(grp, recursive = FALSE)$name
+    setNames(paste0(grp_path, "/", loci), loci)
+  }) %>% unlist()
 
   lapply(names(loc_paths), function(loc) {
-    scm_vec <- rhdf5::h5read(h5f_path, loc_paths[[loc]])
+    scm_vec <- rhdf5::h5read(fid, loc_paths[[loc]])
     scm_idx <- which(scm_vec == 1)
 
     data.frame(
@@ -242,10 +184,7 @@ read_assigned_edges <- function(h5f_path) {
 # Compare SCM's inferred mutation-to-edge assignment (multi_scm() h5 output,
 # via read_assigned_edges()) against the ground-truth edge(s) each mutation
 # was actually emitted on during simulation (the EDGE= INFO tag in the VCF
-# written by build_vcf_df()). A locus can have more than one true origin --
-# EDGE holds a comma-separated list whenever introduce_ism_violations() has
-# merged independent mutations into that locus -- so ground truth here is a
-# *set* of edges, not a single one.
+# written by build_vcf_df()). 
 #
 # ARGUMENTS:
 #   - vcf_df:
@@ -253,54 +192,29 @@ read_assigned_edges <- function(h5f_path) {
 #       edge(s) in INFO as "EDGE=<n>" or "EDGE=<n1>,<n2>,...", indexed
 #       against `sim_tree`
 #   - h5f_path:
-#       Path to the h5 file written by multi_scm()
+#       Path to the h5 file
 #   - sim_tree:
-#       The ground-truth simulation tree -- i.e. the exact tree object
-#       `edges` was indexed against when build_vcf_df() was called
+#       The ground-truth simulation tree
 #   - scm_tree:
-#       The tree object actually passed to multi_scm() for this run (e.g.
-#       after chromosome_scm.R's rooting/ladderizing)
+#       The tree object output by SCM 
 #
 # RETURNS: data.frame, one row per locus present in both vcf_df and the h5
-# file's assigned_edges group(s), with:
-#   - truth_edge_sim_numbering / truth_edge_scm_numbering: comma-joined list
-#     of the true origin edge(s), in sim_tree's and scm_tree's numbering
-#     respectively (translated one at a time via translate_edge_index(); an
-#     origin that has no counterpart in scm_tree's topology shows as NA
-#     within the list rather than being silently dropped)
-#   - scm_assigned_edges: the edge(s) SCM actually assigned
-#   - correct: TRUE only when SCM assigned exactly one edge and it matches
-#     ANY of the true origins (SCM works from a single observed presence
-#     pattern -- the union across however many independent origins produced
-#     it -- so it can at best identify one of them, not "these two edges
-#     independently")
-#   - edge_distance: the edge-count distance (see edge_distance()) between
-#     the edge SCM actually assigned and the *nearest* true origin, for
-#     grading near-misses rather than just right/wrong
-#   - topology_mismatch: TRUE only if NONE of the true origins translate
-#     into scm_tree's numbering (if at least one does, comparison still
-#     proceeds against that subset)
-# `edge_distance`/`correct` are NA/FALSE when there's a full topology
-# mismatch or SCM assigned zero edges (nothing to measure against).
-compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1, full_df = FALSE) {
+# file's assigned_edges group(s)
+compare_scm_edges <- function(vcf_df, 
+                              h5f_path, 
+                              sim_tree, 
+                              scm_tree, 
+                              cores = 1, 
+                              full_df = FALSE) {
 
   sim_keys <- edge_bipartitions(sim_tree)
   scm_keys <- edge_bipartitions(scm_tree)
   scm_node_dist <- node_edge_distances(scm_tree)
-  ## scm_tree's line-graph diameter (longest edge-to-edge distance, treating
-  ## edges rather than nodes as the objects being compared -- see
-  ## line_graph_distance()) is the largest value line_graph_distance() can
-  ## ever return for this tree -- dividing by it turns a raw edge-adjacency
-  ## count into a size/shape-invariant [0, 1] index, so error rates stay
-  ## comparable across trees with different numbers of tips or different
-  ## depths.
+
   scm_diameter <- line_graph_diameter(scm_tree, scm_node_dist)
 
   locus <- paste(vcf_df$CHROM, vcf_df$POS, sep = "_")
-  ## EDGE= holds one or more comma-separated origins (see
-  ## introduce_ism_violations()) -- capture the whole digit+comma run, not
-  ## just the first number, then split per locus into a list of integer
-  ## vectors.
+
   truth_edge_str <- sub(".*EDGE=([0-9,]+).*", "\\1", vcf_df$INFO)
   truth_edges    <- strsplit(truth_edge_str, ",")
 
@@ -322,28 +236,38 @@ compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1, f
     scm_str <- assigned$scm_assigned_edges[assigned$locus == loc]
     scm_idx <- if (nzchar(scm_str)) as.integer(strsplit(scm_str, ",")[[1]]) else integer(0)
 
-    ## Each inferred edge is charged the line-graph distance (see
-    ## line_graph_distance()) to its single closest truth edge, then those
-    ## per-inferred-edge distances are summed -- so a multi-edge assignment
-    ## only reads as "correct" (distance 0) if every inferred edge lands on
-    ## a truth edge, not just one of several. Line-graph distance is used
-    ## rather than node-based edge_distance() because SCM assigns mutations
-    ## to edges, not nodes -- e.g. a sibling edge is genuinely "one step"
-    ## away from the true edge, not two.
+    ## An assignment is correct only if the set of inferred edges is exactly
+    ## the set of (translatable) true origin edges
+    correct <- length(scm_idx) > 0 && length(truth_scm_valid) > 0 &&
+      setequal(scm_idx, truth_scm_valid)
+
+    ## Symmetric nearest-neighbor sum under line-graph distance (see
+    ## line_graph_distance()): every inferred edge is charged the distance to
+    ## its closest truth edge (spurious/misplaced inferences), AND every
+    ## truth edge is charged the distance to its closest inferred edge
+    ## (missed origins). Two distinct edges are always >= 1 apart, so this is
+    ## 0 exactly when `correct` is TRUE and > 0 otherwise -- including when
+    ## SCM recovers only some of the true origins, or adds extras. Line-graph
+    ## distance is used rather than node-based edge_distance() because SCM
+    ## assigns mutations to edges, not nodes -- e.g. a sibling edge is
+    ## genuinely "one step" away from the true edge, not two.
     edge_dist <- if (length(truth_scm_valid) == 0 || length(scm_idx) == 0) {
       NA_integer_
     } else {
-      sum(vapply(scm_idx, function(e) {
-        min(vapply(truth_scm_valid, function(t) line_graph_distance(t, e, scm_tree, scm_node_dist),
-                   numeric(1)))
-      }, numeric(1)))
+      nearest <- function(from, to) {
+        sum(vapply(from, function(a) {
+          min(vapply(to, function(b) line_graph_distance(a, b, scm_tree, scm_node_dist),
+                     numeric(1)))
+        }, numeric(1)))
+      }
+      nearest(scm_idx, truth_scm_valid) + nearest(truth_scm_valid, scm_idx)
     }
 
-    ## Average, per assigned edge, what fraction of the tree's diameter it
-    ## missed by -- 0 means every inferred edge landed exactly on a truth
-    ## edge, 1 means each inferred edge is as far as two nodes can possibly
-    ## be on this tree.
-    edge_distance_normalized <- edge_dist / (length(scm_idx) * scm_diameter)
+    ## Average, per edge considered (inferred + true), what fraction of the
+    ## tree's diameter it missed by -- 0 means the two edge sets coincide, 1
+    ## means every edge is as far as two edges can possibly be on this tree.
+    edge_distance_normalized <- edge_dist /
+      ((length(scm_idx) + length(truth_scm_valid)) * scm_diameter)
 
     if (full_df) {
       data.frame(
@@ -353,7 +277,7 @@ compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1, f
         scm_assigned_edges        = paste(scm_idx, collapse = ","),
         n_edges_assigned          = length(scm_idx),
         topology_mismatch         = length(truth_scm_valid) == 0,
-        correct                   = length(scm_idx) == 1 && scm_idx %in% truth_scm_valid,
+        correct                   = correct,
         edge_distance             = edge_dist,
         edge_distance_normalized  = edge_distance_normalized,
         stringsAsFactors = FALSE
@@ -364,7 +288,7 @@ compare_scm_edges <- function(vcf_df, h5f_path, sim_tree, scm_tree, cores = 1, f
         true_edge                 = paste(truth_scm_idx, collapse = ","),
         assigned_edge             = paste(scm_idx, collapse = ","),
         n_assigned                = length(scm_idx),
-        correct                   = length(scm_idx) == 1 && scm_idx %in% truth_scm_valid,
+        correct                   = correct,
         d                         = edge_dist,
         dnorm                     = edge_distance_normalized,
         stringsAsFactors          = FALSE
@@ -382,24 +306,20 @@ create_mut_vector <- function(phylo, node) {
   mut_vector
 }
 
-# Per-mutation metadata columns create_mut_df() adds alongside "edge" and the
-# tip-label sample columns. Anything downstream that treats a create_mut_df()
-# data frame as a plain (edge + samples) matrix -- e.g. simulate_DP_and_AD(),
-# build_vcf_df() -- must strip *all* of these, not just "edge", to correctly
-# identify which columns are genuine sample genotypes.
-MUT_META_COLS <- c("edge", "mutation_id", "is_driver", "selection_coefficient", "is_ism_violation",
-                   "n_origins", "origin_mutation_ids")
+# Per-mutation metadata columns create_mut_df() adds
+MUT_META_COLS <- c("edge", 
+                   "mutation_id", 
+                   "is_driver", 
+                   "selection_coefficient", 
+                   "is_ism_violation",
+                   "n_origins", 
+                   "origin_mutation_ids")
 
 # function to create a data frame of mutation presence.
-# `driver_info` defaults to tree$driver_info -- set once, by
-# get_phylo_object(), at tree-construction time -- so a driver's
-# mutation_id here is guaranteed to match whatever's already on the tree
-# object.
 create_mut_df <- function(tree, driver_info = tree$driver_info) {
   mat <- matrix(nrow = 0, ncol = length(tree$tip.label) + 1)
 
-  ## Driver info: see get_driver_info(). Since every non-root node has
-  ## exactly one incoming edge, matching a driver's `node` against
+  ## Matching a driver's `node` against
   ## tree$edge[,2] identifies which edge it evolved on.
   has_driver_info <- !is.null(driver_info)
 
@@ -416,15 +336,10 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
                            byrow = TRUE)
       mat <- rbind(mat, mut_matrix)
 
-      ## A driver event marks the branch it arose on (via its child node),
-      ## not a specific one of the n_i background mutations distributed
-      ## along that branch -- treat the earliest-matching driver(s) as the
-      ## first row(s), reusing the mutation_id already assigned to that
-      ## driver event in driver_info, and the rest (if n_i is larger) as
-      ## passengers with a freshly generated hash.
+      ## A driver event marks the branch it arose on (via its child node)
       driver_flags <- rep(FALSE, n_i)
-      sel_coefs     <- rep(NA_real_, n_i)
-      ids           <- character(n_i)
+      sel_coefs <- rep(NA_real_, n_i)
+      ids <- character(n_i)
       n_hits <- 0
       if (has_driver_info) {
         child_node <- tree$edge[i, 2]
@@ -449,27 +364,13 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
   colnames(mat) <- c("edge",tree$tip.label)
   mat <- as.data.frame(mat)
   ## `edge` is character, not numeric, from the start -- one comma-separated
-  ## list of tree-edge indices per mutation. Every mutation begins with
-  ## exactly one origin (e.g. "12"), but introduce_ism_violations() can merge
-  ## several rows into one whose edge holds all of their origins (e.g.
-  ## "12,47"). Keeping the type consistent regardless of whether violations
-  ## are ever introduced avoids create_mut_df()'s output silently changing
-  ## type downstream depending on what happens to it later.
+  ## list of tree-edge indices per mutation. 
   mat$edge <- as.character(mat$edge)
   mat <- mat %>%
     mutate(mutation_id = mutation_id,
            is_driver = is_driver,
            selection_coefficient = selection_coefficient,
-           ## Locus assignment (and therefore whether two mutations actually
-           ## collide at the same site) doesn't happen until
-           ## sample_mutation_loci() runs, well after create_mut_df() -- this
-           ## is a placeholder every mutation starts as FALSE, for whatever
-           ## later step introduces/detects ISM violations to update.
            is_ism_violation = FALSE,
-           ## Number of independent origins of this mutation. Every mutation
-           ## starts as a single, unique origin (1); a later ISM-violation
-           ## step would bump this (and set is_ism_violation = TRUE) for
-           ## loci where multiple independent origins are introduced.
            n_origins = 1L,
            .before = 1)
   mat
@@ -477,9 +378,7 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
 
 # Introduce infinite-sites-model (ISM) violations into a create_mut_df()
 # output by merging groups of otherwise-independent mutation rows into a
-# single shared-locus record -- modeling recurrent/parallel mutation at the
-# same genomic site (n independent tree branches all landing on what will
-# become, once sample_mutation_loci() runs, the same genomic coordinate).
+# single shared-locus record.
 #
 # ARGUMENTS:
 #   - mut_df:
@@ -492,48 +391,24 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
 #       optional RNG seed for reproducible selection
 #   - sel_coef_tol:
 #       numeric tolerance for treating two drivers' selection coefficients
-#       as the same underlying driver effect (see MERGE SEMANTICS)
-#
-# MERGE SEMANTICS:
-#   For each violation, n_origins rows are drawn uniformly at random --
-#   without replacement, and never reusing a row already claimed by an
-#   earlier violation in this same call -- and collapsed into a single row:
-#     - sample columns: logical OR (union) of the merged rows' presence
-#       patterns. The site is "mutated" in a sample if ANY of the
-#       independent origins is ancestral to it.
-#     - n_origins: set to the number of rows merged; is_ism_violation: TRUE.
-#     - is_driver / selection_coefficient: TRUE / that coefficient if any
-#       merged row was a driver, otherwise FALSE / NA. If a driver is drawn
-#       into a candidate merge set, the draw is rejected and retried unless
-#       every OTHER driver in the set shares (within sel_coef_tol) the same
-#       selection_coefficient -- merging two independent drivers with
-#       *different* fitness effects into one locus would be biologically
-#       incoherent (one site can't have two different selective effects on
-#       different branches of the same tree).
-#     - mutation_id: kept from the driver row if the merge includes one --
-#       this has to hold, since tree$driver_info$mutation_id (see
-#       get_driver_info()) is the upstream source of truth for a driver's
-#       id, and downstream code assumes create_mut_df()'s driver rows match
-#       it. Otherwise (no driver involved) a fresh random_hash(), since
-#       there's no principled reason to prefer any one of the merged
-#       passenger mutation_ids over the others.
-#     - edge: becomes the comma-joined union of all n merged rows' edges
-#       (e.g. "12,47") -- create_mut_df() already makes `edge` character for
-#       exactly this reason (see create_mut_df()), so no separate
-#       origin_edges bookkeeping column is needed; `edge` itself is always
-#       "one or more comma-separated tree-edge indices", whether or not any
-#       violation ever touched that row. Downstream consumers (build_vcf_df(),
-#       write_vcf_df(), compare_scm_edges()) are updated to expect that.
-#       origin_mutation_ids preserves the full set of original mutation_ids
-#       the same way, since mutation_id itself stays single-valued.
-#
+#       as the same. The default, 0, requires EXACT equality.
+#   - driver_prop:
+#       NULL (default) rows are drawn uniformly at random, so a driver is only 
+#       included by chance. A number in [0, 1] instead forces exactly
+#       round(driver_prop * total violations) violations (chosen at random)
+#       to include exactly one driver row.
 # RETURNS: a create_mut_df()-shaped data.frame, with an origin_mutation_ids
 # column added, and sum(violation_spec$count * (violation_spec$n_origins - 1))
 # fewer rows than the input.
-introduce_ism_violations <- function(mut_df, violation_spec, seed = NULL, sel_coef_tol = 1e-8) {
+introduce_ism_violations <- function(mut_df, 
+                                     violation_spec, 
+                                     seed = NULL, 
+                                     sel_coef_tol = 0,
+                                     driver_prop = NULL) {
   if (!is.null(seed)) set.seed(seed)
   stopifnot(all(c("n_origins", "count") %in% colnames(violation_spec)))
   stopifnot(all(violation_spec$n_origins >= 2), all(violation_spec$count >= 1))
+  stopifnot(is.null(driver_prop) || (length(driver_prop) == 1 && driver_prop >= 0 && driver_prop <= 1))
 
   n_needed <- sum(violation_spec$n_origins * violation_spec$count)
   if (n_needed > nrow(mut_df)) {
@@ -550,28 +425,54 @@ introduce_ism_violations <- function(mut_df, violation_spec, seed = NULL, sel_co
 
   spec_seq <- rep(seq_len(nrow(violation_spec)), violation_spec$count)
 
-  for (k in spec_seq) {
+  force_driver <- rep(FALSE, length(spec_seq))
+  if (!is.null(driver_prop)) {
+    n_force <- round(driver_prop * length(spec_seq))
+    n_driver_rows <- sum(mut_df$is_driver)
+    if (n_force > n_driver_rows) {
+      warning(sprintf(paste0("driver_prop = %g asks for %d driver-containing violations but mut_df ",
+                             "has only %d driver rows; forcing %d."),
+                      driver_prop, n_force, n_driver_rows, n_driver_rows))
+      n_force <- n_driver_rows
+    }
+    force_driver[sample.int(length(spec_seq), n_force)] <- TRUE
+  }
+
+  for (i in seq_along(spec_seq)) {
+    k <- spec_seq[i]
     n <- violation_spec$n_origins[k]
     available <- which(!used)
     if (length(available) < n) {
       stop("Ran out of unused mutation records while introducing ISM violations.")
     }
 
-    ## Reject-and-redraw: draw n rows uniformly at random, accept only if
-    ## every driver among them shares the same selection_coefficient.
-    max_tries <- 1000
-    picked <- NULL
-    for (attempt in seq_len(max_tries)) {
-      candidate_idx <- sample(available, n)
-      driver_coefs <- mut_df$selection_coefficient[candidate_idx][mut_df$is_driver[candidate_idx]]
-      if (length(driver_coefs) <= 1 || diff(range(driver_coefs)) < sel_coef_tol) {
-        picked <- candidate_idx
-        break
+    if (!is.null(driver_prop)) {
+      ## driver_prop mode: a forced violation takes exactly one unused driver
+      avail_drv  <- available[mut_df$is_driver[available]]
+      avail_pass <- available[!mut_df$is_driver[available]]
+      n_pass_needed <- if (force_driver[i]) n - 1 else n
+      if (length(avail_pass) < n_pass_needed) {
+        stop("Ran out of unused passenger records while introducing ISM violations.")
       }
-    }
-    if (is.null(picked)) {
-      stop("Could not find ", n, " mutation records with a consistent driver ",
-           "selection coefficient after ", max_tries, " attempts.")
+      picked <- c(if (force_driver[i]) avail_drv[sample.int(length(avail_drv), 1)],
+                  avail_pass[sample.int(length(avail_pass), n_pass_needed)])
+    } else {
+      ## Reject-and-redraw: draw n rows uniformly at random, accept only if
+      ## every driver among them shares the same selection_coefficient.
+      max_tries <- 1000
+      picked <- NULL
+      for (attempt in seq_len(max_tries)) {
+        candidate_idx <- sample(available, n)
+        driver_coefs <- mut_df$selection_coefficient[candidate_idx][mut_df$is_driver[candidate_idx]]
+        if (length(driver_coefs) <= 1 || diff(range(driver_coefs)) <= sel_coef_tol) {
+          picked <- candidate_idx
+          break
+        }
+      }
+      if (is.null(picked)) {
+        stop("Could not find ", n, " mutation records with a consistent driver ",
+             "selection coefficient after ", max_tries, " attempts.")
+      }
     }
 
     rows <- mut_df[picked, , drop = FALSE]
@@ -621,7 +522,7 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
   ## Rationale: rather than simulating depth freely and then filtering out
   ## sites/samples that fail QC (which would require discarding rows/columns
   ## after the fact), we draw directly from the region of parameter space
-  ## that WOULD survive filtering. This reflects the assumption that this
+  ## that would survive filtering. This reflects the assumption that this
   ## matrix represents already-QC-passed data.
 
   ## site_factor: multiplicative per-site coverage bias (e.g. GC content,
@@ -663,13 +564,13 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
   ## filter excludes sites whose VAF is too variable across samples (rho too
   ## high / concentration too low). We truncate the concentration prior so
   ## every generated site would already satisfy rho <= rho_max.
-  conc_floor <- (1 - rho_max) / rho_max   # solve rho_max = 1/(1+conc) for conc
+  conc_floor <- (1 - rho_max) / rho_max # solve rho_max = 1/(1+conc) for conc
   site_conc  <- rtrunc(n_mut, "gamma",
-                       a = conc_floor,       # lower bound on concentration (upper bound on rho)
+                       a = conc_floor, # lower bound on concentration (upper bound on rho)
                        b = Inf,
                        shape = site_conc_shape,
                        rate = site_conc_rate)
-  site_rho   <- 1 / (1 + site_conc)   # sanity check: max(site_rho) should be <= rho_max. NOTE: value unused
+  site_rho   <- 1 / (1 + site_conc) # sanity check: max(site_rho) should be <= rho_max
 
   ## dropout: models complete allelic dropout at truly heterozygous sites
   is_het  <- G == 1   # TRUE where the ground-truth genotype is heterozygous (mutation present)
@@ -677,30 +578,26 @@ simulate_DP_and_AD <- function(   G,                     # output from `create_m
 
   ## At true hom-ref sites (not heterozygous), alt reads arise only from
   ## sequencing/mapping error -- binomial draw at the error rate.
-  AD <- matrix(0L, n_mut, n_samp)   # alt-read-count matrix, same shape as DP/G
+  AD <- matrix(0L, n_mut, n_samp) # alt-read-count matrix, same shape as DP/G
   colnames(AD) <- colnames(G)
   AD[!is_het] <- rbinom(sum(!is_het), DP[!is_het], error_rate)
 
-  ## At true het sites WITHOUT dropout: alt-read count is a beta-binomial
+  ## Without dropout: alt-read count is a beta-binomial
   ## draw. The beta distribution's shape parameters (conc*0.5, conc*0.5) are
   ## symmetric around VAF = 0.5 (expected for a true heterozygous variant),
   ## with `conc` (site_conc) controlling how tightly VAF clusters around 0.5
   ## versus how much it's allowed to drift due to locus-specific noise.
   het_ok   <- is_het & !dropout
-  conc_mat <- matrix(site_conc, n_mut, n_samp)[het_ok]   # broadcast site_conc across samples, then subset
+  conc_mat <- matrix(site_conc, n_mut, n_samp)[het_ok]  # broadcast site_conc across samples, then subset
   p_vaf    <- rbeta(sum(het_ok), conc_mat * 0.5, conc_mat * 0.5) 
   AD[het_ok] <- rbinom(sum(het_ok), DP[het_ok], p_vaf)
 
-  ## At true het sites WITH dropout: no true alt signal is observable, so
-  ## alt reads arise only from background error, same as a hom-ref site --
-  ## this is what makes dropout "invisible" to a caller (the site looks
-  ## exactly like hom-ref, not like a low-confidence het call).
+  ## With dropout: no true alt signal is observable, so
+  ## alt reads arise only from background error
   AD[is_het & dropout] <- rbinom(sum(is_het & dropout), DP[is_het & dropout], error_rate)
 
   ## Return everything needed downstream (DP/AD for VCF construction) plus
-  ## the intermediate quantities (useful for diagnostics/sanity checks, e.g.
-  ## confirming max(site_rho) <= rho_max, or inspecting which sites/samples
-  ## got the most extreme depth-bias draws).
+  ## the intermediate quantities (useful for diagnostics/sanity checks).
   list(DP = DP, AD = AD, site_factor = site_factor, sample_factor = sample_factor,
        site_conc = site_conc, site_rho = site_rho, dropout = dropout)
 }
@@ -731,9 +628,7 @@ simulate_GQ_PL_GT <- function(DP, AD, error_rate = 0) {
   ## and the second-best PL, capped at 99.
   GQ <- pmin(PL0 + PL1 + PL2 - pmax(PL0, PL1, PL2) - pmin(PL0, PL1, PL2), 99)
 
-  ## called GT = argmin PL per site/sample. Vectorized in place of
-  ## apply(..., which.min) for the same reason as GQ above; first-index
-  ## tie-break (0/0 over 0/1 over 1/1) matches which.min()'s behavior.
+  ## called GT = argmin PL per site/sample
   GT_idx <- ifelse(PL0 <= PL1 & PL0 <= PL2, 1L, ifelse(PL1 <= PL2, 2L, 3L))
   GT_str <- matrix(c("0/0", "0/1", "1/1")[GT_idx], n_mut, n_samp)
   colnames(GT_str) <- colnames(PL0)
@@ -755,13 +650,6 @@ sample_mutation_loci <- function(n,
   genome     <- get(genome_pkg)
   chrom_lens <- seqlengths(genome)[chroms]
 
-  ## internal recursive core -- genome/chroms/chrom_lens computed once above,
-  ## then just threaded through recursive top-up calls (rare, only fires if
-  ## an N/gap region is hit, or a locus collides with one already drawn --
-  ## `used` accumulates accepted loci across recursive top-ups so every
-  ## returned (chrom, pos) is unique, consistent with an infinite-sites
-  ## assumption; duplicate draws otherwise become non-negligible at these
-  ## mutation counts via the birthday paradox).
   .sample_core <- function(n, used = character(0)) {
     n_draw <- ceiling(n * oversample)
 
@@ -779,7 +667,7 @@ sample_mutation_loci <- function(n,
     valid <- ref %in% c("A", "C", "G", "T") &
       !duplicated(locus_draw) & !(locus_draw %in% used)
     if (sum(valid) < n) {
-      ## extremely rare at buffer >= 1000; simple one-shot top-up rather than looping
+      ## extremely rare at buffer >= 1000
       extra <- .sample_core(n - sum(valid), used = c(used, locus_draw[valid]))
       chrom_out <- c(chrom_draw[valid], extra$chrom)[1:n]
       pos_out   <- c(pos_draw[valid],   extra$pos)[1:n]
@@ -825,13 +713,6 @@ build_vcf_df <- function(G, DP, AD, gl, edges, mut_table,
   G <- G[, !colnames(G) %in% MUT_META_COLS, drop = FALSE]  # keep only sample columns
 
   sample_names <- colnames(G)
-  ## G's sample columns are already exactly the ground-truth presence (0/1)
-  ## matrix create_mut_df()/introduce_ism_violations() build -- whether a
-  ## sample truly descends from an edge bearing the mutation -- independent
-  ## of whatever simulate_GQ_PL_GT() happens to call from noisy reads. Carry
-  ## it into the VCF as its own FORMAT field (TG) so truth vs. observed
-  ## genotype can be compared directly per sample, e.g. to catch cases like
-  ## a heterozygous truth call that reads as 1/1 due to allelic dropout.
   G_truth <- as.matrix(G)
 
   n_mut  <- nrow(mut_table)
@@ -884,16 +765,11 @@ write_vcf_df <- function(vcf_df, file, tree,
 
   ## `tree` is the ground-truth simulation tree the VCF's EDGE= INFO values
   ## are indexed against (see build_vcf_df()) -- required so the tree that
-  ## defines "ground truth" travels with the VCF itself, rather than only
-  ## existing as a separate in-memory/newick-file artifact that could get
-  ## silently mismatched with this specific VCF later.
+  ## defines "ground truth" travels with the VCF itself
   stopifnot(inherits(tree, "phylo"))
 
   ## Default: declare a ##contig line for every CHROM actually present, sized
   ## from the same reference genome sample_mutation_loci() draws loci from.
-  ## htslib-based readers (e.g. the raxml-ng build CellPhy ships) treat any
-  ## CHROM missing a ##contig header as a warning-worthy anomaly, so this
-  ## should not be left NULL unless you really want an unheadered VCF.
   if (identical(contig_lengths, "auto")) {
     chroms <- intersect(chrom_order, unique(vcf_df$CHROM))
     contig_lengths <- GenomeInfoDb::seqlengths(BSgenome.Hsapiens.UCSC.hg38)[chroms]
@@ -941,10 +817,8 @@ write_vcf_df <- function(vcf_df, file, tree,
   invisible(file)
 }
 
-# Rescale a phylo object's branch lengths from raw mutation counts (as held
-# by tr <- get_phylo_object(st_mut) %>% drop.tip("s1")) into a molecular
-# phylogeny with branch lengths in substitutions/site. NOTE: The genome
-# accessibility mask here is assumed to be the "good sites"
+# Rescale a phylo object's branch lengths from raw mutation counts. 
+# NOTE: The genome accessibility mask here is assumed to be the "good sites"
 scale_branches_to_subs_per_site <- function(tr, mask,
                                             mask_chroms = paste0("chr", c(1:22, "X"))) {
 
@@ -955,7 +829,7 @@ scale_branches_to_subs_per_site <- function(tr, mask,
   ## already-imported GRanges of accessible intervals.
   mask_gr <- if (is.character(mask)) rtracklayer::import(mask, format = "bed") else mask
 
-  ## 1000G masks are typically Ensembl-style ("1", "2", ..., "X") rather than
+  ## 1KGP masks are typically Ensembl-style ("1", "2", ..., "X") rather than
   ## UCSC-style ("chr1", "chr2", ..., "chrX"); harmonise to match mask_chroms.
   if (!any(GenomeInfoDb::seqlevels(mask_gr) %in% mask_chroms)) {
     GenomeInfoDb::seqlevels(mask_gr) <- paste0("chr", GenomeInfoDb::seqlevels(mask_gr))
@@ -972,7 +846,7 @@ scale_branches_to_subs_per_site <- function(tr, mask,
 }
 
 # Function estimates the count of expected ISM violations given a 
-# phylogenies total branch length (measured in mutations).
+# phylogenies total branch length (measured in mutations) using birthday paradox
 estimate_ism_violations <- function(phylo, L = 3.2e9) {
   ceiling((sum(phylo$edge.length)^2)/(2*L))
 }

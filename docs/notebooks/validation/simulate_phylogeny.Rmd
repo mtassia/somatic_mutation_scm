@@ -3,8 +3,13 @@ title: "Simulating hematopoietic phylogeny for SCM validation"
 author: "Michael Tassia"
 date: "`r Sys.Date()`"
 output:
-  html_document: default
-  pdf_document: default
+  html_document:
+    toc: true
+    df_print: paged
+  html_notebook:
+    math_method: katex
+    toc: true
+    toc_float: true
 ---
 
 ```{r setup, include = FALSE, warning = FALSE, message = FALSE}
@@ -20,15 +25,15 @@ The objective of this notebook is to document our validation strategy for applyi
 
 This notebook will first describe the approach, key functions, and expected outcomes. Afterwards, additional layers of technical and biological variation will be introduced, including:
 
--   Sample size
+- Sample size
 
--   Sequencing depth
+- Sequencing depth
 
--   Missing data
+- Missing data
 
--   Collapsing branch lengths equal to 0
+- Collapsing branch lengths equal to 0
 
--   Infinite sites model (ISM) violation rate
+- Infinite sites model (ISM) violation rate
 
 # Simulating hematopoiesis {#simulating-hematopoiesis}
 
@@ -69,21 +74,21 @@ hist(sapply(1:1e4, function(x) exp(fitnessFn()) - 1),
 
 Using the DFE above, we can simulate hematopoiesis with stochastic introduction of driver mutations using the `run_driver_process_sim()` wrapper in `rsimpop`. This function has several important parameters which will be defined below:
 
--   `simpop = NULL`: Default setting; do not use a pre-existing simpop object
+- `simpop = NULL`: Default setting; do not use a pre-existing simpop object
 
--   `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
+- `initial_division_rate = 0.1`: Default setting; parameter estimate for HSCs during development; only effects early population growth phase.
 
--   `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+- `final_division_rate = 1/365`: Default setting; parameter estimate for HSCs during adulthood (concordant with the estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
--   `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
+- `target_pop_size = 1e5`: Default setting; mean parameter estimate for HSC population size at adulthood (concordant with the ABC estimates in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)).
 
--   `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
+- `nyears = 50`: User-defined age at collecting data. Validation will integrate across a distribution of ages.
 
--   `fitness = fitnessFn`: User-defined fitness function defined above
+- `fitness = fitnessFn`: User-defined fitness function defined above
 
--   `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+- `drivers_per_cell_per_day = 2.0e-3 / 365`: User-defined count of driver mutations entering the population per day. This is the mean value estimated by ABC in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
-The functions `get_subsampled_tree()` and `get_elapsed_time_tree()` sample a subset of the total cellular phylogeny and re-scale the branch lengths given a fixed somatic mutation rate (i.e., $16.8 \: \textrm{mutations per cell per year}$ estimated in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)). Here, we simulate a population of $P = 50,000$ HSCs, and subsequently sample $N = 100$ tips.
+The functions `get_subsampled_tree()` and `get_elapsed_time_tree()` sample a subset of the total cellular phylogeny and re-scale the branch lengths given a fixed somatic mutation rate (i.e., $16.8 \: \textrm{mutations per cell per year}$ estimated in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y)). Here, we simulate a population of $P = 10,000$ HSCs, and subsequently sample $N = 100$ tips.
 
 ```{r simulate-hsc-population, results = 'hide', warning = FALSE, message = FALSE}
 
@@ -123,7 +128,7 @@ The `get_phylo_object()` function takes the output from `rsimpop::get_elapsed_ti
 
 ```{r extract-phylo-and-fitness, warning = FALSE, message = FALSE}
 
-# Remove s1 from phylogeny
+# Get tree from simulation object
 tr <- get_phylo_object(st_mut)
 
 # Plot fitness distribution
@@ -146,9 +151,9 @@ sim$cfg$drivers %>%
        y = "Count")
 ```
 
-To compare this ground-truth tree (where branch lengths are scaled by the true mutation counts) against a molecular phylogeny, we need to re-scale these mutation counts by the size of the analyzable genome. Scaling will also account for the reduced genome access, as only genomic positions passing a genome-accessibility filter are the only loci realistically analyzed during phylogenetic inference (we use the [1000 Genomes Project genome-accessibility mask](https://ftp.1000genomes.org/vol1/ftp/release/20130502/supporting/accessible_genome_masks/)).
+To compare this ground-truth tree (where branch lengths are scaled by the true mutation counts) against a molecular phylogeny, we need to re-scale these mutation counts by the size of the analyzable genome. Scaling will also account for the reduced genome access, as only genomic positions passing a genome-accessibility filter are the only loci realistically analyzed during phylogenetic inference (we use the [1000 Genomes Project GRCh38 strict accessibility mask](https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes_project/working/20160622_genome_mask_GRCh38/StrictMask/20160622.allChr.mask.bed)).
 
-Note that the branch lengths produced using the methods above will be orders of magnitude smaller than the branch lengths fit by maximum-likelihood methods (e.g., `CellPhy`), as the latter are scaled to the number of sites in the alignment (not the whole genome). The `scale_branches_to_sub_per_site()` function reads a bed file and divides `$edge.length` by the sum of the masked region.
+Note that the branch lengths produced using the methods above will be orders of magnitude smaller than the branch lengths fit by maximum-likelihood methods (e.g., `CellPhy`), as the latter are scaled to the number of sites in the alignment (not the whole genome). The `scale_branches_to_subs_per_site()` function reads a bed file and divides `$edge.length` by the sum of the masked region.
 
 ```{r scale-branches, echo = FALSE, warning = FALSE, message = FALSE}
 
@@ -191,7 +196,7 @@ The `create_mut_df()` function above takes the subsampled `phylo` object output 
 6.  `edge <chr>`: Edge number (in input `phylo` order) for record's origin(s).
 7.  `[s1, s2, ..., sN+1] <dbl>`: Remaining mutation array encoded with presence/absence (`1` or `0`) for whether the mutation is inherited by the tip. As an outgroup (without any mutation) is always introduced by `get_subsampled_tree()`, the number of fields in this component of the dataframe will equal $N + 1$.
 
-Thus, for $N$ sampled tips and a total tree length of $V$ (i.e., $V$ mutations), the resulting data frame will be $(N + 6)\times V$. Note that introducing ISM violations will reduce the total matrix size, as `introduce_ism_violations()` merges records (see [Simulating ISM violations](#simulating-ism_violations) below).
+Thus, for $N$ sampled tips and a total tree length of $V$ (i.e., $V$ mutations), the resulting data frame will be $(N + 7)\times V$ (6 metadata columns plus $N+1$ sample columns, per points 1-7 above). Note that introducing ISM violations will reduce the total matrix size, as `introduce_ism_violations()` merges records (see [Simulating ISM violations](#simulating-ism-violations) below).
 
 The combination of `$edge` and the mutation array patterns can be used to trace a mutation's ancestry. For example:
 
@@ -223,31 +228,31 @@ The extension of this approach for ISM violations ($\ge 2$ origins) will be disc
 
 ## Simulating sequence-read data
 
-The output of `create_mut_df()` is then passed to the `simulate_depth_and_ad()` function to simulate sequence-read data. Default parameters are set such that they mimic the structure of "cleaned" data described in [*Coorens et al. 2025*](https://www.nature.com/articles/s41596-024-00962-8)and/or modeled distribution parameters in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
+The output of `create_mut_df()` is then passed to the `simulate_DP_and_AD()` function to simulate sequence-read data. Default parameters are set such that they mimic the structure of "cleaned" data described in [*Coorens et al. 2025*](https://www.nature.com/articles/s41596-024-00962-8)and/or modeled distribution parameters in [*Mitchell et al. 2022*](https://www.nature.com/articles/s41586-022-04786-y).
 
--   `G`: Matrix output by `create_mut_df()`
+- `G`: Matrix output by `create_mut_df()`
 
--   `D_bar = 20`: Target mean sequencing depth across the whole matrix
+- `D_bar = 20`: Target mean sequencing depth across the whole matrix
 
--   `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style `min_cov`)
+- `min_cov = 6`: Lower depth bound a site must clear to pass QC (Sequoia-style `min_cov`)
 
--   `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
+- `max_cov = 250`: Upper depth bound (excludes repeat/mapping-artifact loci)
 
--   `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
+- `site_sdlog = 0.5`: Log-scale spread of per-site coverage bias (GC/mappability)
 
--   `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
+- `sample_sdlog = 0.3`: Log-scale spread of per-sample library depth variation
 
--   `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
+- `theta = 8`: Negative-binomial dispersion for residual (post-QC) depth noise
 
--   `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
+- `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
 
--   `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
+- `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
 
--   `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
+- `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
 
--   `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
+- `error_rate = 0.002`: Sequencing/mapping error rate (alt reads at true hom-ref sites)
 
--   `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
+- `dropout_rate = 0.00`: $P(\textrm{complete allelic dropout} | \textrm{truly heterozygous site})$
 
 ```{r simulate-reads, warning = FALSE, message = FALSE}
 
@@ -257,21 +262,21 @@ glimpse(sim_reads)
 
 ```
 
-The `simulate_depth_and_ad()` function leverages will generate a list with the following slots:
+The `simulate_DP_and_AD()` function will generate a list with the following slots:
 
--   `$DP` [**stochastic**]: Data frame containing simulated sequence depth at each site $v$ per sample $n$. Thus, $\texttt{DP}_{nv} \sim \textrm{NB} (\mu_{nv} = \texttt{sample_factor}_n \times \texttt{site_factor}_v, \theta = \texttt{theta})$
+- `$DP` [**stochastic**]: Data frame containing simulated sequence depth at each site $v$ per sample $n$. Thus, $\texttt{DP}_{nv} \sim \textrm{NB} (\mu_{nv} = \texttt{sample\_factor}_n \times \texttt{site\_factor}_v, \theta = \texttt{theta})$
 
--   `$AD` [**stochastic**]: Data frame containing simulated variant allele depth at each site $v$ per sample $n$. For samples without mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p = \texttt{error_rate})$. For samples bearing mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p \sim Beta(\alpha = \beta = \frac{1}{2}\texttt{site_conc}_{nv}))$
+- `$AD` [**stochastic**]: Data frame containing simulated variant allele depth at each site $v$ per sample $n$. For samples without mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p = \texttt{error\_rate})$. For samples bearing mutation, $\texttt{AD}_{nv} \sim \textrm{Binom}(n = \texttt{DP}_{nv}, p \sim Beta(\alpha = \beta = \frac{1}{2}\texttt{site\_conc}_{nv}))$
 
--   `$site_factor` [**stochastic**]: Vector containing scaling factors for each $v$ simulated loci; $\texttt{site_factor}_v \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \texttt{sigma_v}, a = \frac{\texttt{min_cov}}{\texttt{D_bar}}, b = \frac{\texttt{max_cov}}{\texttt{D_bar}})$
+- `$site_factor` [**stochastic**]: Vector containing scaling factors for each $v$ simulated locus; $\texttt{site\_factor}_v \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \texttt{site\_sdlog}, a = \frac{\texttt{min\_cov}}{\texttt{D\_bar}}, b = \frac{\texttt{max\_cov}}{\texttt{D\_bar}})$
 
--   `$sample_factor` [**stochastic**]: Vector containing scaling factors for each $n + 1$ sampled tips ($+1$ for the added outgroup); $\texttt{sample_factor}_n \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \sigma_v, \alpha = \frac{\texttt{min_cov}}{\bar{D}}, \beta = \infty)$
+- `$sample_factor` [**stochastic**]: Vector containing scaling factors for each $n + 1$ sampled tips ($+1$ for the added outgroup); $\texttt{sample\_factor}_n \sim \textrm{LogN}_{tr} (\mu = 0, \sigma = \sigma_v, a = \frac{\texttt{min\_cov}}{\texttt{D\_bar}}, b = \infty)$
 
--   `$site_conc` [**stochastic**]: Vector containing symmetric beta distribution shape parameters used to simulate `$AD` at each $NV$ site; $\texttt{site_conc}_v \sim \Gamma_{tr}(\alpha = \texttt{site_conc_shape}, \beta = \texttt{site_conc_rate},a = \frac{(1 - \texttt{rho_max})}{\texttt{rho_max}},b = \infty)$
+- `$site_conc` [**stochastic**]: Vector containing symmetric beta distribution shape parameters used to simulate `$AD` at each $NV$ site; $\texttt{site\_conc}_v \sim \Gamma_{tr}(\alpha = \texttt{site\_conc\_shape}, \beta = \texttt{site\_conc\_rate},a = \frac{(1 - \texttt{rho\_max})}{\texttt{rho\_max}},b = \infty)$
 
--   `$site_rho` [**deterministic**]: Beta-binomial's $\rho$ parameter for each $v$ site; $\rho_{v} = \frac{1}{(1 + \texttt{site_conc}_v)}$
+- `$site_rho` [**deterministic**]: Beta-binomial's $\rho$ parameter for each $v$ site; $\rho_{v} = \frac{1}{(1 + \texttt{site\_conc}_v)}$
 
--   `$dropout` [**stochastic**]: Boolean vector for whether a sample $n$ experiences allelic dropout at site $v$.
+- `$dropout` [**stochastic**]: Boolean vector for whether a sample $n$ experiences allelic dropout at site $v$.
 
 Below, we'll visualize the realized distribution of mean read depth across all sites and samples under the function's default parameters.
 
@@ -342,7 +347,7 @@ glimpse(head(vcf_df,1)[1:11])
 
 ```
 
-Note that the VCF-like structure may contain some records with unobserved variants in the sampled population due to the stochastic nature of \``` simulate_depth_and_ad()` ``:
+Note that the VCF-like structure may contain some records with unobserved variants in the sampled population due to the stochastic nature of `simulate_DP_and_AD()`:
 
 ```{r vcf-unobserved-variants, warning = FALSE, message = FALSE}
 
@@ -366,7 +371,7 @@ write.tree(tr_mol, file = "test_sim/test_sim.nwk")
 
 ```
 
-# Testing the SCM framework on simulated data
+# Testing the SCM framework on simulated data {#testing-the-scm-framework-on-simulated-data}
 
 Given the simulated tree and somatic variants above, SCM can be performed to infer the evolutionary history of somatic variants given simulated read data. Here, we'll use the ground truth tree and just test the performance of SCM in reproducing each variant's origin on the tree. In practice, SCM would be performed on a molecular phylogeny inferred from the VCF file above.
 
@@ -392,7 +397,7 @@ The function above also produces a phylogeny with branch lengths recomputed acco
 ```{r read-cellphy-tree, include = FALSE, warning = FALSE, message = FALSE}
 
 # read tree
-cellphy_tr <- read.tree("test_sim/cellphy.raxml.bestTree")
+cellphy_tr <- read.tree("test_sim/test_sim.raxml.bestTree")
 
 # Robinson-Foulds distance
 cat(paste("Robinson-Foulds distance between true tree and CellPhy output: ",
@@ -447,7 +452,7 @@ g <- ggplot(data.frame(i = 1:length(edge_diff),
   geom_histogram(fill = "gray50",
                  binwidth = 0.01) +
   theme_cowplot() +
-  labs(x = "Total edge-length inaccuracy (%)",
+  labs(x = "Edge length vs ground-truth (%)",
        y = "Edges (count)")
 
 (g | g.tr) + plot_layout(widths = c(2,3))
@@ -580,13 +585,11 @@ assigned.gq <- plot_vcf_df %>%
   as.integer()
 
 dp.p <- wilcox.test(x = missing.dp,
-                    y = assigned.dp,
-                    exact = TRUE)$p.value %>%
+                    y = assigned.dp)$p.value %>%
   signif(digits = 4)
 
 gq.p <- wilcox.test(x = missing.gq,
-                    y = assigned.gq,
-                    exact = TRUE)$p.value %>%
+                    y = assigned.gq)$p.value %>%
   signif(digits = 4)
 ```
 
@@ -596,7 +599,7 @@ Next, we assess concordance between the SCM-inferred origins for the mutations a
 
 ```{r compare-scm-edges, echo = FALSE, warning = FALSE, message = FALSE}
 
-# Compare edge mapping (bipartitions) for each mutation 
+# Compare edge mapping (bipartitions) for each mutation (this step is quite slow)
 edge_comp.df <- compare_scm_edges(vcf_df = vcf_df,
                                   h5f_path = "test_sim/test_sim.h5",
                                   sim_tree = tr_mol,
@@ -614,11 +617,11 @@ paste("Edge-mapping concordance:", round(pcon, 3))
 
 ```
 
-Here, we measure distance as a one-sided, nearest-neighbor sum from inferred edges to truth edges: $$
-\Delta(S,T) = \sum_{e \in S}\min_{t \in T}d(t,e),
+Here, we measure distance as a symmetric, nearest-neighbor sum between the inferred and truth edges: $$
+\Delta(S,T) = \sum_{e \in S}\min_{t \in T}d(t,e) + \sum_{t \in T}\min_{e \in S}d(t,e),
 $$
 
-where $S = {e_1, \dots, e_k}$ is the set of SCM-inferred edges for a mutation and $T = t_1, \dots, t_m$ is the set of valid edges that can be assigned for a mutation. Since we use SCM to assign mutations to *edges*, not nodes, $d(\cdot,\cdot)$ is the **line-graph (edge-adjacency) distance**: the distance two edges would have as vertices of the tree's line graph, where two edges are adjacent (distance 1) exactly when they share an endpoint node. Concretely, for edges $e=(p_e,c_e)$ and $f=(p_f,c_f)$ (parent node, child node),
+where $S = {e_1, \dots, e_k}$ is the set of SCM-inferred edges for a mutation and $T = t_1, \dots, t_m$ is the set of valid edges that can be assigned for a mutation. The first term penalizes each inferred edge for its distance from the nearest true origin (misplaced or spurious assignments), and the second penalizes each true mutation for its distance from the nearest inferred edge (origins SCM failed to recover). An assignment is `correct` only when $S = T$. Since we use SCM to assign mutations to *edges*, not nodes, $d(\cdot,\cdot)$ is the **line-graph (edge-adjacency) distance**: the distance two edges would have as vertices of the tree's line graph, where two edges are adjacent (distance 1) exactly when they share an endpoint node. Concretely, for edges $e=(p_e,c_e)$ and $f=(p_f,c_f)$ (parent node, child node),
 
 $$
 d(e,f) = 1 + \min\big(d_{\text{node}}(p_e,p_f),\, d_{\text{node}}(p_e,c_f),\, d_{\text{node}}(c_e,p_f),\, d_{\text{node}}(c_e,c_f)\big), \quad e \neq f,
@@ -626,13 +629,13 @@ $$
 
 with $d(e,e)=0$ and $d_{\text{node}}(\cdot,\cdot)$ the node-to-node edge-count distance. This makes sibling edges $d = 1$ apart rather than $2$, and an edge and its immediate parent edge $d = 1$ apart as well.
 
-To account for the tree topology in this metric (and bound the value $[0,1]$), we normalize by the tree's line-graph diameter $D$ -- the largest $d(e,f)$ between any two edges of the tree -- times the number of inferred edges. Thus,
+To account for the tree topology in this metric (and bound the value $[0,1]$), we normalize by the tree's line-graph diameter $D$ -- the largest $d(e,f)$ between any two edges of the tree -- times the total number of edges compared, $|S| + |T|$. Thus,
 
 $$
-\Delta_{norm}(S,T) = \frac{1}{|S| \times D}\sum_{e \in S}\min_{t \in T}d(t,e) \in [0,1].
+\Delta_{norm}(S,T) = \frac{1}{(|S| + |T|) \times D}\left(\sum_{e \in S}\min_{t \in T}d(t,e) + \sum_{t \in T}\min_{e \in S}d(t,e)\right) \in [0,1].
 $$
 
-A value of $0$ reflects inference completely concordant with truth, and a value of $1$ corresponds to an inferred history as far as two edges can possibly be from one another (given the tree's topology).
+Because two distinct edges are always at least $1$ apart, a value of $0$ occurs exactly when the inferred and true edge sets coincide, and a value of $1$ corresponds to an inferred history as far as two edges can possibly be from one another (given the tree's topology).
 
 A visual example of this metric is provided below:
 
@@ -647,17 +650,19 @@ node_dist <- node_edge_distances(tree)
 diameter <- line_graph_diameter(tree, node_dist)
 
 # truth/inferred
-truth_edge <- c(8, 9)
-inferred_edge <- c(8, 11)
+truth_edge <- c(4, 8)
+inferred_edge <- c(1)
 
-# compute dist: for each inferred edge, distance to its single closest
-# truth edge, summed across all inferred edges (same aggregation
-# compare_scm_edges() uses)
-per_edge_dist <- sapply(inferred_edge, function(e) {
-  min(sapply(truth_edge, function(t) line_graph_distance(t, e, tree, node_dist)))
-})
-raw_dist <- sum(per_edge_dist)
-norm_dist <- raw_dist / (length(inferred_edge) * diameter)
+# compute dist: symmetric nearest-neighbor sum -- each inferred edge's
+# distance to its closest truth edge, plus each truth edge's distance to
+# its closest inferred edge (same aggregation compare_scm_edges() uses)
+nearest <- function(from, to) {
+  sum(sapply(from, function(a) {
+    min(sapply(to, function(b) line_graph_distance(a, b, tree, node_dist)))
+  }))
+}
+raw_dist <- nearest(inferred_edge, truth_edge) + nearest(truth_edge, inferred_edge)
+norm_dist <- raw_dist / ((length(inferred_edge) + length(truth_edge)) * diameter)
 
 # plot tree -- an edge in both truth_edge and inferred_edge (a correct
 # match) gets its own category so it isn't masked by whichever assignment
@@ -729,9 +734,11 @@ g2 <- ggplot(incorrect.df,
 
 ```
 
+These data suggest that when a mutation is misplaced on the phylogeny, they're misplaced relatively near by the ground-truth.
+
 ### Placement error for ISM mutations
 
-A major error-modality here appears is low depth. For example, the variant at `chr10:7337951` is ought to be present in `r edge_bipartitions(tr_mol)[17]`, but SCM misplaces the mutation with a distance, $d$, of ``` r line_graph_distance(incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(true_edge) %>% as.integer(), incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(assigned_edge) %>% as.integer(),``tr_mol``, node_edge_distances(tr_mol)) ```. Upon examination, these VCF records show that low simulated depth is a likely driver of this observation:
+A major error-modality here appears is low depth. For example, the variant at `chr10:7337951` ought to be present in `r edge_bipartitions(tr_mol)[17]`, but SCM misplaces the mutation with a distance, $d$, of ``` r line_graph_distance(incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(true_edge) %>% as.integer(), incorrect.df %>% filter(locus == "chr10:7337951") %>% pull(assigned_edge) %>% as.integer(),``tr_mol``, node_edge_distances(tr_mol)) ```. Upon examination, these VCF records show that low simulated depth is a likely driver of this observation:
 
 ```{r false-positive-example-table, echo = FALSE, warning = FALSE, message = FALSE}
 
@@ -836,9 +843,10 @@ g.dp <- ggplot(mismapped_vcf.df %>%
               axes = "collect", 
               guides = "collect") &
   theme(legend.position = "top")
+
 ```
 
-This observation motivates stringent filtering at the scale of genotype quality.
+This observation motivates [stringent filtering at the scale of genotype quality]{.underline}.
 
 ### False-positive ISM violations
 
@@ -856,30 +864,27 @@ incorrect.df <- edge_comp.df %>%
                                  n_assigned == 1 ~ factor("mismapped"),
                                  n_assigned > 1 ~ factor("multimapped")))
 
-max_d <- max(incorrect.df$d, na.rm = TRUE)
+max_d <- max(incorrect.df$dnorm, na.rm = TRUE)
 
 # Plot edge_distance for all mismapping mutations
 incorrect.df %>%
-  mutate(d_plot = ifelse(is.na(d), max_d + 1, d)) %>%
-  ggplot(aes(x = d_plot, fill = error_class)) +
-  geom_histogram(binwidth = 1, color = "white") +
-  scale_fill_npg() + 
-  scale_x_continuous(
-    breaks = c(seq(0, max_d, 1), max_d + 1),
-    labels = c(seq(0, max_d, 1), "NA")
-  ) +
+  filter(!is.na(dnorm)) %>%
+  ggplot(aes(x = dnorm, fill = error_class)) +
+  geom_histogram(binwidth = 0.01, color = "white") +
+  scale_fill_npg() +
   scale_y_log10() +
+  scale_x_continuous(breaks = seq(0,max_d,0.02)) +
   theme_cowplot() +
   theme(legend.title = element_blank(),
                 legend.position = "top") +
   labs(y = "mutations (count)",
-       x = expression(Delta),
+       x = expression(Delta[norm]),
        fill = "error class")
 ```
 
 If we isolate only the multimapping mutations (i.e., false-positive ISM violations):
 
-```{r}
+```{r false-positive-ism-violations}
 
 incorrect.df %>%
   filter(n_assigned > 1) %>% 
@@ -887,15 +892,17 @@ incorrect.df %>%
 
 ```
 
+For many of the false-positives listed above, these represent nested events where an ancestral branch is assigned the transition and a descent is incorrectly inferred to possess a reversion.
+
 ### Effect of branch length
 
 As SCM simulates genotype evolution according to a continuous-time Markov chain modeled as a Poisson process, the probability that a mutation occurs along an edge and that edge's length are exponentially related where,
 
 $$
-f(t) = \lambda e^{\lambda t}, ~~~ \lambda = -q_{ii}.
+f(t) = \lambda e^{-\lambda t}, ~~~ \lambda = -q_{ii}.
 $$
 
-In this context, $t$ is the edge length (measured in molecular time: substitutions per site) and $-q_{ii}$ is the diagonal element of the genotype substitution matrix $Q$ in state $i$. This example is pulled directly from equation 4 in [Bollback et al. 2006](https://pmc.ncbi.nlm.nih.gov/articles/PMC1403802/). Because we only simulate mutations that transition unphased genotypes from homozygous to heterozygous states, we will plot the relationship between edge length and the unconditional state transition probability for [A/A, C/C, G/G, T/T] below:
+In this context, $t$ is the edge length (measured in molecular time: substitutions per site) and $-q_{ii}$ is the diagonal element of the genotype substitution matrix $Q$ in state $i$. This example is pulled directly from equation 4 in [Bollback et al. 2006](https://pmc.ncbi.nlm.nih.gov/articles/PMC1403802/). Because we only simulate mutations that transition unphased genotypes from homozygous to heterozygous states, we will plot the relationship between edge length and the unconditional state transition probability for [A/A, C/C, G/G, T/T] below. Note that because we randomly select mutation loci from the human genome, the frequency ($\pi$) of each genotype is relatively equal (this is not expected to be the case for somatic variants, where C\>T are the most common).
 
 ```{r prob-change-vs-branch-length, warning = FALSE, echo = FALSE}
 
@@ -919,8 +926,10 @@ p_change_df <- lapply(branch_lengths, function(v) {
 ggplot(p_change_df, aes(x = v, 
                         y = p_change, 
                         color = state)) +
-  geom_line(linewidth = 1) +
-  scale_color_npg(guide = 'none') +
+  geom_line(linewidth = 0.5) +
+  scale_color_npg() +
+  scale_y_log10() +
+  annotation_logticks(sides = "l") +
   theme_cowplot() +
   theme(strip.background = element_blank(),
         aspect.ratio = 1) +
@@ -967,7 +976,9 @@ where $\sum_{i}v_i$ is the total branch length of the sub-sampled phylogeny (mea
 
 ## Introducing ISM violations
 
-Below, we'll use both this predicted value and/or a fixed value to introduce ISM violations into the data frame output of `create_mut_df()`. A plot is generated reflecting an example for the ISM violations introduced on the phylogeny.
+Below, we'll use both this predicted value and/or a fixed value to introduce ISM violations into the data frame output of `create_mut_df()`. Note that in this implementation, we randomly draw from the mutations and match on fitness coefficient when merging another variant into the ISM class (see [Alternative ISM-violation strategy](#alternative-ism-violation-strategy) below for a more reliable simulation mechanism to introduce ISM violations.
+
+A plot is generated reflecting an example for the ISM violations introduced on the phylogeny.
 
 ```{r introduce-ism-violations, warning = FALSE, message = FALSE}
 
@@ -977,8 +988,8 @@ viols <- data.frame(n_origins = 2,
 
 # Broadcase violations onto mut_mat
 mut_mat.viol <- introduce_ism_violations(mut_df = mut_mat,
-                         violation_spec = viols,
-                         seed = SEED)
+                                         violation_spec = viols,
+                                         seed = SEED)
 
 # Pull example for plotting
 example_viol <- mut_mat.viol %>%
@@ -1036,7 +1047,131 @@ write.tree(tr_mol, file = "test_sim/test_sim.viol.nwk")
 
 ## Testing ISM violation comparisons
 
-The following tests use the same underlying data as the examples shown in [Simulating hematopoiesis](#simulating-hematopoiesis).
+As a basic proof of concept before scaling up this validation pipeline, we'll investigate whether ISM violations are accurately reconstructed on the phylogeny.
+
+```{r measure-ism-violation-performance, echo = FALSE, error = FALSE}
+
+# Read SCM tree
+scm_viol.tr <- read.tree(file = "test_sim/test_sim.viol.scm.nwk")
+
+# Compare edge mapping (bipartitions) for each mutation (this step is quite slow)
+edge_comp.viol.df <- compare_scm_edges(vcf_df = vcf_df.viol,
+                                       h5f_path = "test_sim/test_sim.viol.h5",
+                                       sim_tree = tr,
+                                       scm_tree = scm_viol.tr, 
+                                       cores = 4)
+
+# Subset to only mutations that have assignments and summarize concordance
+pcon <- edge_comp.viol.df %>% 
+  filter(n_assigned > 0) %>%
+  dplyr::select(locus, correct) %>%
+  summarize(concordance = sum(correct)/n()) %>%
+  pull(concordance)
+
+paste("Edge-mapping concordance (with ISM-violation):", round(pcon, 3))
+```
+
+For the mutations pre-determined to be ISM violations, we recover both as placed in the correct position.
+
+```{r investigate-ground-truth-ism-viols}
+
+viol_loc <- vcf_df.viol %>%
+  filter(grepl(x = INFO, pattern = "ISM_VIOL=1")) %>%
+  select(CHROM,POS) %>%
+  mutate(loc = paste(CHROM,POS,sep="_")) %>%
+  pull(loc)
+
+edge_comp.viol.df %>% filter(locus %in% viol_loc)
+
+```
+
+## Alternative ISM-violation strategy
+
+Instead of simulating under the same gamma-DFE, we could instead sample a few random deviates from the distribution and then uniformly sample that posterior distribution. Another alternative is to encode two classes of beneficial mutation: weakly beneficial and beneficial. Either way, this
+
+Below, we'll simulate using a discretized gamma DFE, drawing $K = 10$ random deviates from the distribution and uniformly sampling those during the population simulation:
+
+```{r alternative-ism-strategy}
+
+# Set seed
+SEED <- 1212121
+
+# DFE function
+set.seed(SEED)
+fitness_sample <- rgamma(n = 10,
+                         shape = 0.47, 
+                         rate = 34)
+sub_fitnessFn <- function() sample(fitness_sample, size = 1)
+
+
+# Simulation seed
+initSimPop(SEED, bForce = TRUE)
+
+# Run rsimpop
+sim_ism <- run_driver_process_sim(
+  simpop                   = NULL,  
+  initial_division_rate    = 0.1,  
+  final_division_rate      = 1/365,   
+  target_pop_size          = 1e5, 
+  nyears                   = 80,  
+  fitness                  = sub_fitnessFn, 
+  drivers_per_cell_per_day = 2.0e-3 / 365  
+)
+
+# Sample 100 cells from the HSC population
+st_ism <- get_subsampled_tree(sim_ism, 100)
+
+# Re-scale the phylogeny by mutations
+st_ism_mut <- get_elapsed_time_tree(st_ism, 
+                                mutrateperdivision = 0, 
+                                backgroundrate = 16.8/365)
+
+# Plot driver events on the phylogeny
+plot_tree_events(st_ism_mut,
+                 cex.label = 0,
+                 legpos = NULL,
+                 mar = c(3,3,3,5))
+mtext("Mutation burden (count)", side = 4, line = 3)
+```
+
+# Simulating a posterior distribution
+
+We will expand the logic above to simulate a posterior distribution of histories and test for concordance between the simulated "ground-truth" and SCM. For the first pass, we will simulate relatively clean read data with `simulate_DP_and_AD()`. This will still yield sample-wise and site-wise variation, but minimize the effects of sequencing noise.
+
+The parameters used for `simulate_DP_and_AD()` are the following:
+
+- `D_bar = 30`: Target mean sequencing depth
+
+- `min_cov = 10`: Lower depth bound
+
+- `max_cov = 250`: Upper depth bound
+
+- `site_sdlog = 0.1`: Log-scale spread of per-site coverage bias
+
+- `sample_sdlog = 0.1`: Log-scale spread of per-sample depth variance
+
+- `theta = 8`: Negative-binomial dispersion for residual depth noise
+
+- `rho_max = 0.1`: Beta-binomial overdispersion ceiling a site must clear (Sequoia snv_rho)
+
+- `site_conc_shape = 4`: Gamma shape for the distribution of per-site VAF concentration
+
+- `site_conc_rate = 0.3`: Gamma rate for the distribution of per-site VAF concentration
+
+- `error_rate = 0.000`: Sequencing/mapping error rate
+
+- `dropout_rate = 0.00` : Allelic dropout rate
+
+We will test performance on phylogenies where the population is $P = 10,000$, sample size $N = \{25, 50, 100, 500\}$, age is $t = \{20, 40, 60, 80\}$, and the number of ISM violations is a multiple of $X = \{1,10,100\} \times E[\textrm{ISM violations}]$, restricting to 2 origins each. For each of these parameter combinations, we'll simulate 100 replicates (totaling $4,800$ simulations) for $n_{SCM} = 1,000$ replicates. Each simulation will generate the following:
+
+1.  Sampled phylogeny for ground truth (output from `scale_branches_to_subs_per_site()`)
+2.  VCF used for simulation (output from `build_vcf_df()`)
+3.  Fit substitution matrix (fit using `CellPhy`)
+4.  SCM H5 (output from SCM pipeline)
+5.  SCM-scaled phylogeny (output from SCM pipeline)
+6.  Summary of mapping concordance (output from `compare_scm_edges()`)
+
+As above, phylogeny will remain fixed for these simulations.
 
 # Session info
 

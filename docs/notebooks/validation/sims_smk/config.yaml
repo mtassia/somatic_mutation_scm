@@ -1,0 +1,6 @@
+n: [20,50,100,500]
+t: [20,40,60,80]
+viol_mul: [0,1,10,100]
+accessibility_mask: "https://ftp.1000genomes.ebi.ac.uk/vol1/ftp/data_collections/1000_genomes_project/working/20160622_genome_mask_GRCh38/StrictMask/20160622.allChr.mask.bed"
+scm_reps: 1000
+pop_size: 10000
