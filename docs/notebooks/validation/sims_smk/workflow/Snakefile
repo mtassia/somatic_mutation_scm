@@ -22,14 +22,40 @@ pathlib.Path("logs/").mkdir(parents=True, exist_ok=True)
 
 #--- RULES ---#
 rule all:
-    input: 
-        "results/mask.bed"
+    input:
+        "results/mask.bed",
+        "results/rsimpop_installed.txt"
 
 rule download_mask:
     output: "results/mask.bed"
-    params: 
+    params:
         url: config["accessibility_mask"]
     shell:
         """
         wget -O {output} {params.url}
+        """
+
+rule clone_rsimpop:
+    output: directory("results/rsimpop")
+    params:
+        repo = config["rsimpop_repo"],
+        commit = config["rsimpop_commit"]
+    shell:
+        """
+        git clone {params.repo} {output}
+        git -C {output} checkout {params.commit}
+        """
+
+rule install_rsimpop:
+    input:
+        src = "results/rsimpop",
+        env = workflow.source_path("envs/simulate_history.yaml")
+    output: "results/rsimpop_installed.txt"
+    conda: "envs/simulate_history.yaml"
+    threads: 4
+    shell:
+        """
+        MAKEFLAGS="-j{threads}" R CMD INSTALL \\
+            --library="$(Rscript -e 'cat(.Library)')" {input.src}
+        Rscript -e 'library(rsimpop); cat("rsimpop", as.character(packageVersion("rsimpop")), "\\n")' > {output}
         """
