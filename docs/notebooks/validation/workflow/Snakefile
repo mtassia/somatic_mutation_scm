@@ -46,7 +46,7 @@ rule all:
     input:
         "resources/mask.bed",
         "results/rsimpop_installed.txt",
-        expand("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf",
+        expand("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf.gz",
                n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, rep=REPS)
 
 rule download_mask:
@@ -91,7 +91,7 @@ rule simulate_ground_truth:
         rsimpop = "results/rsimpop_installed.txt",
         script = "workflow/bin/simulate_ground_truth.Rscript"
     output:
-        vcf   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf",
+        vcf   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf.gz",
         nwk   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.nwk",
         truth = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.truth.rds"
     params:

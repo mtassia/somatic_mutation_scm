@@ -33,10 +33,12 @@
 ##   --prefix           output file prefix, default built from the arguments.
 ##
 ## OUTPUTS  (in --out_dir)
-##   <prefix>.vcf       ground-truth VCF (build_vcf_df()/write_vcf_df()); the
-##                      EDGE= INFO tag holds each mutation's true origin
-##                      edge(s), ISM_VIOL/N_ORIGINS mark ISM violations, and
-##                      the FORMAT field TG holds true presence/absence.
+##   <prefix>.vcf.gz    gzip-compressed ground-truth VCF; the EDGE= INFO
+##                      tag holds each mutation's true origin edge(s),
+##                      ISM_VIOL/N_ORIGINS mark ISM violations, and the FORMAT
+##                      field TG holds true presence/absence. Plain gzip, not
+##                      bgzip: readable by vcfR/zcat/bcftools, but not
+##                      tabix-indexable (recompress with bgzip if needed).
 ##   <prefix>.nwk       ground-truth tree, branch lengths in substitutions per
 ##                      site -- the --tree input for CellPhy.
 ##   <prefix>.truth.rds list(tr, tr_mol, params, summary): `tr` is the
@@ -275,11 +277,13 @@ say("     kept ", format(nrow(vcf_out), big.mark = ","), " of ",
 
 ## ---- 5. write outputs ----------------------------------------------------
 stage("Writing the VCF, tree and truth object")
-vcf_file <- file.path(out_dir, paste0(prefix, ".vcf"))
+vcf_file <- file.path(out_dir, paste0(prefix, ".vcf.gz"))
 nwk_file <- file.path(out_dir, paste0(prefix, ".nwk"))
 rds_file <- file.path(out_dir, paste0(prefix, ".truth.rds"))
 
-write_vcf_df(vcf_out, file = vcf_file, tree = tr)
+vcf_con <- gzfile(vcf_file, open = "wt")
+write_vcf_df(vcf_out, file = vcf_con, tree = tr)
+close(vcf_con)
 ape::write.tree(tr_mol, file = nwk_file)
 
 summary <- list(n_tips = length(tr$tip.label),
