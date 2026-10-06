@@ -10,6 +10,8 @@ USAGE:
 """
 
 #--- IMPORTS ---#
+import hashlib
+import os
 import pathlib
 
 #--- CONFIGURATION ---#
@@ -20,11 +22,32 @@ shell.prefix("set -euo pipefail;")
 # Create a log directory
 pathlib.Path("logs/").mkdir(parents=True, exist_ok=True)
 
+#--- SIMULATION GRID ---#
+# One simulation per (n, t, viol_mult, rep): n sampled cells, t years,
+# viol_mult x the expected number of ISM violations (0 = none), and rep = 1..sim_reps.
+SAMPLE_SIZES = config["n"]
+AGES         = config["t"]
+VIOL_MULTS   = config["viol_mult"]
+REPS         = list(range(1, config["sim_reps"] + 1))
+
+wildcard_constraints:
+    n         = r"\d+",
+    t         = r"\d+",
+    viol_mult = r"[0-9.]+",
+    rep       = r"\d+"
+
+def sim_seed(wildcards):
+    """Seed unique to each simulation, derived from its wildcards."""
+    key = f"{wildcards.n}_{wildcards.t}_{wildcards.viol_mult}_{wildcards.rep}"
+    return int(hashlib.md5(key.encode()).hexdigest()[:7], 16) # < 2**28
+
 #--- RULES ---#
 rule all:
     input:
         "resources/mask.bed",
-        "results/rsimpop_installed.txt"
+        "results/rsimpop_installed.txt",
+        expand("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf",
+               n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, rep=REPS)
 
 rule download_mask:
 # note that this will not work on discovery because of port22 closure; predownload instead
@@ -59,4 +82,38 @@ rule install_rsimpop:
         MAKEFLAGS="-j{threads}" R CMD INSTALL \\
             --library="$(Rscript -e 'cat(.Library)')" {input.src}
         Rscript -e 'library(rsimpop); cat("rsimpop", as.character(packageVersion("rsimpop")), "\\n")' > {output}
+        """
+
+# One job per (n, t, viol_mult, rep). viol_mult = 0 means no ISM violations
+rule simulate_ground_truth:
+    input:
+        mask    = "resources/mask.bed",
+        rsimpop = "results/rsimpop_installed.txt",
+        script = "workflow/bin/simulate_ground_truth.Rscript"
+    output:
+        vcf   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf",
+        nwk   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.nwk",
+        truth = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.truth.rds"
+    params:
+        out_dir     = "results/sims",
+        prefix      = "n{n}_t{t}_v{viol_mult}_r{rep}",
+        seed        = sim_seed,
+        pop_size    = config["pop_size"],
+        driver_prop = lambda wildcards: "--driver_prop 0.5" if float(wildcards.viol_mult) > 0 else ""
+    conda: "envs/simulate_history.yaml"
+    threads: 1
+    resources:
+        mem_mb = 16000
+    log: "logs/simulate_ground_truth/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    shell:
+        """
+        Rscript {input.script} \\
+            --sample_size {wildcards.n} \\
+            --age {wildcards.t} \\
+            --ism_multiplier {wildcards.viol_mult} {params.driver_prop} \\
+            --seed {params.seed} \\
+            --pop_size {params.pop_size} \\
+            --mask {input.mask} \\
+            --out_dir {params.out_dir} \\
+            --prefix {params.prefix} > {log} 2>&1
         """
