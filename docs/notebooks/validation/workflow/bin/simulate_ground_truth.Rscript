@@ -5,8 +5,8 @@
 ## substitution-rate parameters. 
 ##
 ## USAGE
-##   Rscript simulate_ground_truth.R --sample_size 100 --age 60 \
-##       [--ism] [--ism_multiplier 10] [--seed 1212121] [--out_dir sims]
+##   Rscript simulate_ground_truth.Rscript --sample_size 100 --age 60 \
+##       --mask mask.bed --out_dir sims [--ism_multiplier 10] [--seed 1212121]
 ##
 ## ARGUMENTS
 ##   --sample_size      required. Number of cells sampled from the full
@@ -14,28 +14,22 @@
 ##                      by rsimpop's sampler, so the tree has sample_size + 1
 ##                      tips).
 ##   --age              required. Years of simulated hematopoiesis (nyears).
-##   --ism              flag. Introduce ISM violations. When set, the
-##                      population is simulated under the discretized gamma
-##                      DFE (--dfe_k deviates drawn once, then sampled uniformly
-##                      per driver event); otherwise under the continuous
-##                      gamma DFE.
-##   --ism_multiplier   numeric > 0, default 1. With --ism, introduce
-##                      multiplier x E[ISM violations] violations (rounded up),
-##                      each with 2 origins, where E is
-##                      estimate_ism_violations(tree). Ignored without --ism.
+##   --ism_multiplier   numeric >= 0, default 0. at 0 NO ISM violations are 
+##                      introduced and the population is simulated under the 
+##                      continuous gamma DFE. At > 0, introduce 
+##                      multiplier x E[ISM violations] violations (rounded up), 
+##                      each with 2 origins, where E is estimate_ism_violations(tree)
+##   --driver_prop      optional, in [0, 1]. Proportion of the ISM violations
+##                      forced to include exactly one driver mutation
+##                      (round(driver_prop x violations). Default: not used.
 ##   --seed             integer, default 1212121.
 ##   --pop_size         full-population target size, default 10000.
 ##   --dfe_k            number of discrete fitness deviates for the ISM DFE,
 ##                      default 10.
-##   --driver_prop      optional, in [0, 1]. With --ism, force this proportion
-##                      of violations to include one driver mutation (see
-##                      introduce_ism_violations()). Default: not used.
-##   --mask             REQUIRED. Path to a LOCAL accessibility-mask BED file
-##                      (e.g. the 1000 Genomes GRCh38 strict mask, fetched by
-##                      the Snakefile's download_mask rule) used to rescale
-##                      branch lengths to substitutions/site. URLs are not
-##                      accepted, so compute nodes need no network access.
-##   --out_dir          output directory, default "ground_truth".
+##   --mask             REQUIRED. Path to a local accessibility-mask BED file
+##                      (e.g. the 1000 Genomes GRCh38 strict mask)
+##   --out_dir          REQUIRED. Output directory (created if it does not
+##                      exist).
 ##   --prefix           output file prefix, default built from the arguments.
 ##
 ## OUTPUTS  (in --out_dir)
@@ -62,13 +56,10 @@ script_dir <- local({
   f <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
   if (length(f) == 1) dirname(normalizePath(f)) else getwd()
 })
-## simphy_functions.R lives with the notebook (docs/notebooks/validation/),
-## several directories above this script (sims_smk/workflow/bin/): search the
-## script's directory and each parent for it.
-search_dirs <- Reduce(function(d, i) dirname(d), seq_len(5), script_dir, accumulate = TRUE)
-functions_file <- Filter(file.exists, file.path(search_dirs, "simphy_functions.R"))
-if (length(functions_file) == 0) stop("Could not find simphy_functions.R at or above ", script_dir)
-suppressMessages(suppressWarnings(source(functions_file[1])))
+## simphy_functions.R is kept in this same directory (workflow/bin/).
+functions_file <- file.path(script_dir, "simphy_functions.R")
+if (!file.exists(functions_file)) stop("Could not find simphy_functions.R next to this script: ", functions_file)
+suppressMessages(suppressWarnings(source(functions_file)))
 
 ## ---- argument parsing ----------------------------------------------------
 suppressPackageStartupMessages(library(optparse))
@@ -78,22 +69,20 @@ option_list <- list(
               help = "REQUIRED. Cells sampled from the full population simulation (an outgroup tip is added, so the tree has sample_size + 1 tips)."),
   make_option("--age", type = "double", default = NULL,
               help = "REQUIRED. Years of simulated hematopoiesis."),
-  make_option("--ism", action = "store_true", default = FALSE,
-              help = "Introduce ISM violations (discretized gamma DFE; see 'Alternative ISM-violation strategy')."),
-  make_option("--ism_multiplier", type = "double", default = 1,
-              help = "With --ism: introduce this multiple of the expected number of ISM violations, each with 2 origins [default %default]."),
+  make_option("--ism_multiplier", type = "double", default = 0,
+              help = "Introduce this multiple of the expected number of ISM violations, each with 2 origins. 0 = NO ISM violations (continuous gamma DFE); > 0 uses the discretized gamma DFE of the 'Alternative ISM-violation strategy' [default %default]."),
   make_option("--seed", type = "double", default = 1212121,
               help = "RNG seed [default %default]."),
   make_option("--pop_size", type = "double", default = 1e4,
               help = "Full-population target size [default %default]."),
   make_option("--dfe_k", type = "double", default = 10,
-              help = "With --ism: number of discrete fitness deviates drawn from the gamma DFE [default %default]."),
+              help = "With --ism_multiplier > 0: number of discrete fitness deviates drawn from the gamma DFE [default %default]."),
   make_option("--driver_prop", type = "double", default = NULL,
-              help = "With --ism: proportion in [0, 1] of violations forced to include one driver mutation [default: not used]."),
+              help = "With --ism_multiplier > 0: proportion in [0, 1] of ISM violations forced to include exactly one driver mutation (capped at the number of drivers on the tree) [default: not used]."),
   make_option("--mask", type = "character", default = NULL,
               help = "REQUIRED. Path to a local accessibility-mask BED file for rescaling branch lengths to substitutions/site."),
-  make_option("--out_dir", type = "character", default = "ground_truth",
-              help = "Output directory [default %default]."),
+  make_option("--out_dir", type = "character", default = NULL,
+              help = "REQUIRED. Output directory (created if it does not exist)."),
   make_option("--prefix", type = "character", default = NULL,
               help = "Output file prefix [default: built from the arguments].")
 )
@@ -104,7 +93,7 @@ opt_parser <- OptionParser(
 )
 opt <- parse_args(opt_parser)
 
-for (req in c("sample_size", "age", "mask")) {
+for (req in c("sample_size", "age", "mask", "out_dir")) {
   if (is.null(opt[[req]])) {
     print_help(opt_parser)
     stop("Missing required argument --", req, call. = FALSE)
@@ -121,22 +110,26 @@ check_whole <- function(x, name) {
 check_whole(opt$sample_size, "sample_size"); check_whole(opt$seed, "seed"); check_whole(opt$dfe_k, "dfe_k")
 if (opt$sample_size < 1) stop("--sample_size must be >= 1", call. = FALSE)
 if (opt$age <= 0) stop("--age must be > 0", call. = FALSE)
-if (opt$ism_multiplier <= 0) stop("--ism_multiplier must be > 0", call. = FALSE)
+## --ism_multiplier is the single switch for ISM violations: 0 means none are
+## introduced at all, > 0 means they are. A pipeline can therefore pass
+## `--ism_multiplier {viol_mul}` for every job.
+ism_multiplier <- opt$ism_multiplier
+if (is.na(ism_multiplier) || ism_multiplier < 0) stop("--ism_multiplier must be >= 0", call. = FALSE)
+ism <- ism_multiplier > 0
+
 if (opt$dfe_k < 1) stop("--dfe_k must be >= 1", call. = FALSE)
 if (opt$sample_size >= opt$pop_size) stop("--sample_size must be smaller than --pop_size", call. = FALSE)
-if (!is.null(opt$driver_prop) && (opt$driver_prop < 0 || opt$driver_prop > 1)) {
+if (!is.null(opt$driver_prop) && (is.na(opt$driver_prop) || opt$driver_prop < 0 || opt$driver_prop > 1)) {
   stop("--driver_prop must be in [0, 1]", call. = FALSE)
 }
-if (!is.null(opt$driver_prop) && !opt$ism) warning("--driver_prop is ignored without --ism")
+if (!is.null(opt$driver_prop) && !ism) warning("--driver_prop is ignored because --ism_multiplier is 0")
 
 sample_size    <- opt$sample_size
 age            <- opt$age
-ism            <- opt$ism
-ism_multiplier <- opt$ism_multiplier
 seed           <- opt$seed
 pop_size       <- opt$pop_size
 dfe_k          <- opt$dfe_k
-driver_prop    <- opt$driver_prop
+driver_prop    <- if (ism) opt$driver_prop else NULL
 mask_path      <- opt$mask
 out_dir        <- opt$out_dir
 prefix <- if (is.null(opt$prefix)) {
@@ -150,15 +143,41 @@ params <- list(sample_size = sample_size, age = age, ism = ism,
                seed = seed, pop_size = pop_size,
                dfe_k = if (ism) dfe_k else NA_integer_,
                driver_prop = driver_prop, mask = mask_path)
-message("[", prefix, "] parameters: ",
-        paste(names(params), vapply(params, function(x) paste(format(x), collapse = ","), ""),
-              sep = "=", collapse = "; "))
+## ---- progress reporting (stdout) -----------------------------------------
+total_steps <- 7L
+t_script <- Sys.time()
+.stage <- new.env()
+.stage$i  <- 0L
+.stage$t0 <- NULL
+say <- function(...) {
+  cat(sprintf("[%s] %s  %s\n", prefix, format(Sys.time(), "%H:%M:%S"), paste0(...)))
+  flush(stdout())
+}
+stage_done <- function() {
+  if (!is.null(.stage$t0)) {
+    say(sprintf("     done in %.1fs", as.numeric(difftime(Sys.time(), .stage$t0, units = "secs"))))
+    .stage$t0 <- NULL
+  }
+}
+stage <- function(label) {
+  stage_done()
+  .stage$i  <- .stage$i + 1L
+  .stage$t0 <- Sys.time()
+  say(sprintf("(%d/%d) %s", .stage$i, total_steps, label))
+}
+
+say("parameters: ",
+    paste(names(params), vapply(params, function(x) paste(format(x), collapse = ","), ""),
+          sep = "=", collapse = "; "))
 
 ## ---- 1. population simulation (rsimpop) ----------------------------------
 ## Without ISM violations: continuous gamma DFE (Mitchell et al. 2022).
 ## With ISM violations ("Alternative ISM-violation strategy"): draw K deviates
 ## from that gamma once, then sample uniformly among them per driver event, so
 ## independent driver events can share an identical fitness coefficient.
+stage(sprintf("Simulating hematopoiesis with rsimpop (population %g, %g years, %s DFE)",
+              pop_size, age,
+              if (ism) sprintf("discretized gamma, K = %g", dfe_k) else "continuous gamma"))
 if (ism) {
   set.seed(seed)
   fitness_sample <- rgamma(n = dfe_k, shape = 0.47, rate = 34)
@@ -167,8 +186,8 @@ if (ism) {
   fitnessFn <- genGammaFitness(shape = 0.47, rate = 34, seed = seed)
 }
 
-## rsimpop prints progress to stdout; keep logs readable when looping this
-## script over many replicates.
+## Swallow output that rsimpop's R code prints. NOTE: rsimpop's compiled code
+## also writes lines such as "Cellcomparment : ..." straight to stdout
 quiet <- function(expr) {
   invisible(utils::capture.output(res <- force(expr)))
   res
@@ -185,28 +204,44 @@ sim <- quiet(run_driver_process_sim(
   drivers_per_cell_per_day = 2.0e-3 / 365
 ))
 
+stage(sprintf("Sampling %g cells and building the ground-truth tree", sample_size))
 st     <- quiet(get_subsampled_tree(sim, sample_size))
 st_mut <- quiet(get_elapsed_time_tree(st, mutrateperdivision = 0, backgroundrate = 16.8 / 365))
 tr     <- get_phylo_object(st_mut)
+say("     tree: ", length(tr$tip.label), " tips, total length ",
+    format(sum(tr$edge.length), big.mark = ","), " mutations, ",
+    if (is.null(tr$driver_info)) 0L else nrow(tr$driver_info), " driver events")
 
 ## ---- 2. ground-truth molecular phylogeny ---------------------------------
+stage("Rescaling branch lengths to substitutions/site (accessibility mask)")
 tr_mol <- scale_branches_to_subs_per_site(tr, mask = mask_path)
 
 ## ---- 3. mutation history truth (+ ISM violations) ------------------------
+stage("Building the mutation history")
 mut_mat <- create_mut_df(tr)
+say("     ", format(nrow(mut_mat), big.mark = ","), " mutation records")
 
 n_ism <- 0L
 if (ism) {
   expected_ism <- estimate_ism_violations(tr)
   n_ism <- as.integer(ceiling(ism_multiplier * expected_ism))
+  say("     introducing ", n_ism, " ISM violations (", ism_multiplier,
+      " x expected ", expected_ism, ")",
+      if (!is.null(driver_prop)) paste0(", ", driver_prop * 100, "% targeted to include a driver") else "")
   viols <- data.frame(n_origins = 2, count = n_ism)
   mut_mat <- introduce_ism_violations(mut_df = mut_mat,
                                       violation_spec = viols,
                                       seed = seed,
                                       driver_prop = driver_prop)
+  say("     introduced ", sum(mut_mat$is_ism_violation), " ISM violations (",
+      sum(mut_mat$is_ism_violation & mut_mat$is_driver), " with a driver)")
+} else {
+  say("     no ISM violations (--ism_multiplier 0)")
 }
 
 ## ---- 4. sequence reads, genotypes, VCF -----------------------------------
+stage(sprintf("Simulating sequence reads (%s records x %d samples)",
+              format(nrow(mut_mat), big.mark = ","), length(tr$tip.label)))
 sim_reads <- simulate_DP_and_AD(G = mut_mat,
                                 D_bar           = 30,
                                 min_cov         = 10,
@@ -220,6 +255,8 @@ sim_reads <- simulate_DP_and_AD(G = mut_mat,
                                 error_rate      = 0,
                                 dropout_rate    = 0,
                                 seed            = seed)
+
+stage("Calling genotypes, sampling genomic loci and building the VCF")
 sim_genotypes <- simulate_GQ_PL_GT(AD = sim_reads$AD, DP = sim_reads$DP)
 mut_table     <- sample_mutation_loci(nrow(sim_genotypes$GT), seed = seed)
 
@@ -233,8 +270,11 @@ vcf_df <- build_vcf_df(G = mut_mat,
 ## Records with no observed alt allele in any sample carry no information
 ## for SCM or CellPhy, so they are dropped (as in the notebook).
 vcf_out <- vcf_df[!grepl("AC=0", vcf_df$INFO, fixed = TRUE), ]
+say("     kept ", format(nrow(vcf_out), big.mark = ","), " of ",
+    format(nrow(vcf_df), big.mark = ","), " records (dropped those with no observed alt allele)")
 
 ## ---- 5. write outputs ----------------------------------------------------
+stage("Writing the VCF, tree and truth object")
 vcf_file <- file.path(out_dir, paste0(prefix, ".vcf"))
 nwk_file <- file.path(out_dir, paste0(prefix, ".nwk"))
 rds_file <- file.path(out_dir, paste0(prefix, ".truth.rds"))
@@ -247,12 +287,15 @@ summary <- list(n_tips = length(tr$tip.label),
                 n_vcf_records = nrow(vcf_out),
                 n_ism_violations = sum(mut_mat$is_ism_violation),
                 n_ism_violations_requested = n_ism,
+                n_ism_violations_with_driver = sum(mut_mat$is_ism_violation & mut_mat$is_driver),
                 n_driver_events_in_tree = if (is.null(tr$driver_info)) 0L else nrow(tr$driver_info),
                 n_distinct_driver_fitness = if (is.null(tr$driver_info)) 0L else length(unique(tr$driver_info$fitness)),
                 total_tree_length_mutations = sum(tr$edge.length))
 saveRDS(list(tr = tr, tr_mol = tr_mol, params = params, summary = summary), rds_file)
 
-message("[", prefix, "] done: ",
-        summary$n_tips, " tips, ", summary$n_vcf_records, " VCF records, ",
-        summary$n_ism_violations, " ISM violations -> ", out_dir)
-message("CellPhy input: --msa ", vcf_file, " --tree ", nwk_file)
+stage_done()
+say("complete in ", sprintf("%.1f", as.numeric(difftime(Sys.time(), t_script, units = "mins"))),
+    " min: ", summary$n_tips, " tips, ", summary$n_vcf_records, " VCF records, ",
+    summary$n_ism_violations, " ISM violations (",
+    summary$n_ism_violations_with_driver, " with a driver) -> ", out_dir)
+say("CellPhy input: --msa ", vcf_file, " --tree ", nwk_file)

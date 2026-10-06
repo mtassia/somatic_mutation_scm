@@ -41,12 +41,12 @@ We use the publicly available [`rsimpop` package](https://github.com/nangalialab
 
 Here, we use `rsimpop` with parameters set following empirical estimates from the literature. Fitness coefficients manifest as bias toward symmetric division, and polygenic effects are assumed to be additive.
 
-The libraries and functions used in this notebook are tracked in [`simphy_functions.R`](./simphy_functions.R).
+The libraries and functions used in this notebook are tracked in [`simphy_functions.R`](../workflow/bin/simphy_functions.R).
 
 ```{r source-functions, include = FALSE, warning = FALSE, message = FALSE}
 
 suppressMessages(
-  source("simphy_functions.R")
+  source("../workflow/bin/simphy_functions.R")
 )
 
 ```
@@ -411,12 +411,12 @@ cat(paste("Robinson-Foulds distance between true tree and CellPhy output: ",
 ```{r source-scm-functions, include = FALSE, warning = FALSE, message = FALSE}
 
 suppressPackageStartupMessages(
-  source("../../../smk/workflow/bin/SCM.smk.R")
+  source("../../../../smk/workflow/bin/SCM.smk.R")
 )
 
 ```
 
-The [SCM Snakemake pipeline](../../../) was run on the simulated data above with 100 SCM replicates per record. Below, we'll compare the count of **true mutations** generated along an edge to the count of **inferred mutations**.
+The [SCM Snakemake pipeline](../../../../) was run on the simulated data above with 100 SCM replicates per record. Below, we'll compare the count of **true mutations** generated along an edge to the count of **inferred mutations**.
 
 ```{r scm-vs-truth-tree-plot, echo = FALSE, warning = FALSE, message = FALSE}
 
