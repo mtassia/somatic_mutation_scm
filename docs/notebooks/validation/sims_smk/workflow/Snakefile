@@ -23,13 +23,14 @@ pathlib.Path("logs/").mkdir(parents=True, exist_ok=True)
 #--- RULES ---#
 rule all:
     input:
-        "results/mask.bed",
+        "resources/mask.bed",
         "results/rsimpop_installed.txt"
 
 rule download_mask:
-    output: "results/mask.bed"
+# note that this will not work on discovery because of port22 closure; predownload instead
+    output: "resources/mask.bed"
     params:
-        url: config["accessibility_mask"]
+        url = config["accessibility_mask"]
     shell:
         """
         wget -O {output} {params.url}
