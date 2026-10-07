@@ -2,6 +2,7 @@
 results/
 resources/
 logs/
+sandbox/
 .R*
 doc/*.Rproj
 doc/*.nb.html

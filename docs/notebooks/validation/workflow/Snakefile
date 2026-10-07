@@ -62,6 +62,10 @@ def sim_mem_mb(wildcards, attempt):
     return int(est_mb * (1 + 0.5 * (attempt - 1)))
 
 #--- RULES ---#
+localrules:
+    clone_rsimpop,
+    clone_cellphy
+
 rule all:
     input:
         "resources/mask.bed",
@@ -101,7 +105,7 @@ rule clone_cellphy:
     shell:
         """
         git clone {params.repo} {output.repo}
-        git -C {output} checkout {params.commit}
+        git -C {output.repo} checkout {params.commit}
         """
 
 rule install_rsimpop:
@@ -163,6 +167,8 @@ rule fit_Q_cellphy:
     threads: 4
     params:
         prefix = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}"
+    resources:
+        mem_mb = sim_mem_mb
     shell:
         """
         {input.cellphy} \
