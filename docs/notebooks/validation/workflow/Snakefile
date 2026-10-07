@@ -34,7 +34,13 @@ wildcard_constraints:
     n         = r"\d+",
     t         = r"\d+",
     viol_mult = r"[0-9.]+",
-    rep       = r"\d+"
+    rep       = r"\d+",
+    chrom     = r"chr(?:[0-9]+|X)"
+
+# SCM runs per chromosome. The production pipeline (smk/) stops at chr22; the
+# simulated genomes are diploid on chrX like everywhere else, so it is included.
+CHROMS  = [f"chr{c}" for c in range(1, 23)] + ["chrX"]
+SCM_BIN = "../../../smk/workflow/bin"   # SCM scripts, relative to the launch directory (validation/)
 
 def sim_seed(wildcards):
     """Seed unique to each simulation, derived from its wildcards."""
@@ -79,6 +85,24 @@ def fit_mem_mb(wildcards, input, attempt):
     est_mb = max(2000, fit_sites(wildcards, input) * 2 * int(wildcards.n) * 200 / 1e6)
     return int(est_mb * (1 + 0.5 * (attempt - 1)))
 
+def scm_mem_mb(wildcards, attempt):
+    """Memory (MB) for one per-chromosome SCM job.
+
+    Each job loads only its chromosome's VCF (split_vcf_by_chrom).  The largest
+    chromosome (chr1) holds ~9% of the records, so cells = 0.09 * sites * (n + 1).
+    PROVISIONAL: 600 B per cell (vcfR + genotype-state list) over a 2 GB base,
+    floored at 4 GB, not yet measured.  Each retry asks for 50% more."""
+    n = int(wildcards.n)
+    cells = 0.09 * min(int(wildcards.t) * (190 + 11.25 * n), 520 * n) * (n + 1)
+    est_mb = max(4000, 2000 + cells * 600 / 1e6)
+    return int(est_mb * (1 + 0.5 * (attempt - 1)))
+
+def scm_chrom_h5s(wildcards):
+    """The per-chromosome h5 files of one simulation."""
+    return expand("results/scm/n{n}_t{t}_v{v}_r{r}.{chrom}.h5",
+                  n=wildcards.n, t=wildcards.t, v=wildcards.viol_mult,
+                  r=wildcards.rep, chrom=CHROMS)
+
 #--- RULES ---#
 localrules:
     clone_rsimpop,
@@ -88,8 +112,11 @@ rule all:
     input:
         "resources/mask.bed",
         "results/rsimpop_installed.txt",
-        expand("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestModel",
+        expand("results/scm/compare/n{n}_t{t}_v{viol_mult}_r{rep}.tsv",
                n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, rep=REPS)
+
+
+## -- setup -- ##
 
 rule download_mask:
 # note that this will not work on discovery because of port22 closure; predownload instead
@@ -140,6 +167,8 @@ rule install_rsimpop:
         Rscript -e 'library(rsimpop); cat("rsimpop", as.character(packageVersion("rsimpop")), "\\n")' > {output}
         """
 
+## -- simulate history -- ##
+
 # One job per (n, t, viol_mult, rep). viol_mult = 0 means no ISM violations
 rule simulate_ground_truth:
     input:
@@ -174,8 +203,9 @@ rule simulate_ground_truth:
             --prefix {params.prefix} > {log} 2>&1
         """
 
+## -- fit Q -- ##
+
 # Cheap pass that counts the VCF records, so fit_Q_cellphy can size itself
-# from the real alignment instead of a model.
 rule count_sites:
     input: rules.simulate_ground_truth.output.vcf
     output: temp("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.nsites")
@@ -211,4 +241,133 @@ rule fit_Q_cellphy:
             --prefix {params.prefix} \\
             --threads {threads} \\
             --force perf_threads > {log} 2>&1
+        """
+
+## -- scm -- ##
+
+# Split each ground-truth VCF by chromosome so every SCM job reads only its own
+# chromosome instead of the whole file. 
+rule split_vcf_by_chrom:
+    input:
+        vcf = rules.simulate_ground_truth.output.vcf
+    output:
+        temp(expand("results/scm/vcf/n{{n}}_t{{t}}_v{{viol_mult}}_r{{rep}}.{chrom}.vcf.gz",
+                    chrom=CHROMS))
+    params:
+        chroms = " ".join(CHROMS),
+        prefix = "results/scm/vcf/n{n}_t{t}_v{viol_mult}_r{rep}"
+    conda: "envs/htslib.yaml"
+    threads: 1
+    shell:
+        """
+        tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+        gzip -dc {input.vcf} | bgzip -c > "$tmp/all.vcf.gz"
+        tabix -p vcf "$tmp/all.vcf.gz"
+        for c in {params.chroms}; do
+            tabix -h "$tmp/all.vcf.gz" "$c" | bgzip -c > {params.prefix}.$c.vcf.gz
+        done
+        """
+
+# Stochastic character mapping of one chromosome of one simulation, using the
+# CellPhy-fitted tree and Q matrix.  The outgroup tip of every simulation is s1.
+rule scm_chromosome:
+    input:
+        tree      = rules.fit_Q_cellphy.output.bestTree,
+        model     = rules.fit_Q_cellphy.output.bestModel,
+        vcf       = "results/scm/vcf/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.vcf.gz",
+        script    = f"{SCM_BIN}/chromosome_scm.R",
+        functions = f"{SCM_BIN}/SCM.smk.R"
+    output:
+        h5 = temp("results/scm/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.h5")
+    params:
+        prefix = "results/scm/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}",
+        reps   = config["scm_reps"]
+    conda: "../../../../smk/workflow/envs/scm.yaml"
+    threads: 4
+    resources:
+        mem_mb = scm_mem_mb
+    log: "logs/scm_chromosome/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.log"
+    shell:
+        """
+        Rscript {input.script} \\
+            -f {input.functions} \\
+            -v {input.vcf} \\
+            -t {input.tree} \\
+            -m {input.model} \\
+            -p {params.prefix} \\
+            -o s1 \\
+            -n {threads} \\
+            -i {params.reps} \\
+            -c {wildcards.chrom} > {log} 2>&1
+        """
+
+rule merge_scm_h5:
+    input:
+        h5_files  = scm_chrom_h5s,
+        script    = f"{SCM_BIN}/merge_scm_h5.R",
+        functions = f"{SCM_BIN}/SCM.smk.R"
+    output:
+        h5 = "results/scm/merged/n{n}_t{t}_v{viol_mult}_r{rep}.h5"
+    params:
+        h5_files_str = lambda wildcards, input: ",".join(input.h5_files)
+    conda: "../../../../smk/workflow/envs/scm.yaml"
+    resources:
+        mem_mb = lambda wildcards, attempt: 4000 * attempt
+    log: "logs/merge_scm_h5/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    shell:
+        """
+        Rscript {input.script} \\
+            -f {input.functions} \\
+            -i {params.h5_files_str} \\
+            -o {output.h5} > {log} 2>&1
+        """
+
+rule write_scm_tree:
+    input:
+        h5        = rules.merge_scm_h5.output.h5,
+        tree      = rules.fit_Q_cellphy.output.bestTree,
+        script    = f"{SCM_BIN}/write_burden_to_tree.R",
+        functions = f"{SCM_BIN}/SCM.smk.R"
+    output:
+        tree = "results/scm/trees/n{n}_t{t}_v{viol_mult}_r{rep}.scm.nwk"
+    conda: "../../../../smk/workflow/envs/scm.yaml"
+    resources:
+        mem_mb = lambda wildcards, attempt: 4000 * attempt
+    log: "logs/write_scm_tree/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    shell:
+        """
+        Rscript {input.script} \\
+            --functions {input.functions} \\
+            --input {input.h5} \\
+            --tree {input.tree} \\
+            --output {output.tree} \\
+            --outgroup s1 \\
+            --merged > {log} 2>&1
+        """
+
+# Score SCM's inferred mutation origins against the simulated truth.
+rule compare_scm:
+    input:
+        vcf     = rules.simulate_ground_truth.output.vcf,
+        truth   = rules.simulate_ground_truth.output.truth,
+        h5      = rules.merge_scm_h5.output.h5,
+        scm_tree = rules.write_scm_tree.output.tree,
+        rsimpop = "results/rsimpop_installed.txt",
+        script  = "workflow/bin/compare_scm.Rscript"
+    output:
+        tsv = "results/scm/compare/n{n}_t{t}_v{viol_mult}_r{rep}.tsv"
+    conda: "envs/simulate_history.yaml"
+    threads: 4
+    resources:
+        mem_mb = lambda wildcards, attempt: 4000 * attempt
+    log: "logs/compare_scm/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    shell:
+        """
+        Rscript {input.script} \\
+            --vcf {input.vcf} \\
+            --truth {input.truth} \\
+            --scm_tree {input.scm_tree} \\
+            --h5 {input.h5} \\
+            --out {output.tsv} \\
+            --threads {threads} > {log} 2>&1
         """

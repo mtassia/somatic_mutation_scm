@@ -26,3 +26,4 @@ dependencies:
   - r-scales
   - r-rcolorbrewer
   - bcftools
+  - bioconductor-rhdf5   # reads the SCM h5 files in compare_scm_edges()
