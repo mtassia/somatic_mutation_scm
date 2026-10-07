@@ -61,6 +61,24 @@ def sim_mem_mb(wildcards, attempt):
     est_mb = max(3500, 2000 + cells * 100 / 1e6) * 1.2
     return int(est_mb * (1 + 0.5 * (attempt - 1)))
 
+def fit_sites(wildcards, input):
+    """Number of VCF records (= alignment sites) for a simulation"""
+    try:
+        return int(open(input.nsites).read())
+    except (OSError, ValueError):
+        n, t = int(wildcards.n), int(wildcards.t)
+        return min(t * (190 + 11.25 * n), 520 * n)
+
+def fit_threads(wildcards, input):
+    """raxml-ng splits sites across threads"""
+    return max(1, min(16, round(fit_sites(wildcards, input) / 8500)))
+
+def fit_mem_mb(wildcards, input, attempt):
+    """Peak memory (MB) requested for one CellPhy tree evaluation.
+    Each retry asks for 50% more."""
+    est_mb = max(2000, fit_sites(wildcards, input) * 2 * int(wildcards.n) * 200 / 1e6)
+    return int(est_mb * (1 + 0.5 * (attempt - 1)))
+
 #--- RULES ---#
 localrules:
     clone_rsimpop,
@@ -156,29 +174,41 @@ rule simulate_ground_truth:
             --prefix {params.prefix} > {log} 2>&1
         """
 
+# Cheap pass that counts the VCF records, so fit_Q_cellphy can size itself
+# from the real alignment instead of a model.
+rule count_sites:
+    input: rules.simulate_ground_truth.output.vcf
+    output: temp("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.nsites")
+    shell:
+        """
+        gzip -dc {input} | awk '!/^#/ {{n++}} END {{print n+0}}' > {output}
+        """
+
 rule fit_Q_cellphy:
     input:
+        nsites = rules.count_sites.output[0],
         nwk = rules.simulate_ground_truth.output.nwk,
         vcf = rules.simulate_ground_truth.output.vcf,
         cellphy = rules.clone_cellphy.output.script
     output:
         bestTree = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestTree",
         bestModel = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestModel"
-    threads: 4
+    threads: fit_threads
     params:
         prefix = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}"
     resources:
-        mem_mb = sim_mem_mb
+        mem_mb = fit_mem_mb
+    log: "logs/fit_Q_cellphy/n{n}_t{t}_v{viol_mult}_r{rep}.log"
     shell:
         """
-        {input.cellphy} \
-            RAXML \
-            --evaluate \
-            --msa {input.vcf} \
-            --msa-format vcf \
-            --model GT10+FO \
-            --tree {input.nwk} \
-            --prefix {params.prefix} \
-            --threads {threads} \
-            --force perf_threads
+        {input.cellphy} \\
+            RAXML \\
+            --evaluate \\
+            --msa {input.vcf} \\
+            --msa-format vcf \\
+            --model GT10+FO \\
+            --tree {input.nwk} \\
+            --prefix {params.prefix} \\
+            --threads {threads} \\
+            --force perf_threads > {log} 2>&1
         """
