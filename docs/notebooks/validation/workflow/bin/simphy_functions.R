@@ -317,7 +317,8 @@ MUT_META_COLS <- c("edge",
 
 # function to create a data frame of mutation presence.
 create_mut_df <- function(tree, driver_info = tree$driver_info) {
-  mat <- matrix(nrow = 0, ncol = length(tree$tip.label) + 1)
+  ## Per-edge blocks are collected here and bound together once at the end.
+  blocks <- list()
 
   ## Matching a driver's `node` against
   ## tree$edge[,2] identifies which edge it evolved on.
@@ -334,7 +335,7 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
       mut_matrix <- matrix(rep(mut_vector, n_i),
                            nrow = n_i,
                            byrow = TRUE)
-      mat <- rbind(mat, mut_matrix)
+      blocks[[length(blocks) + 1L]] <- mut_matrix
 
       ## A driver event marks the branch it arose on (via its child node)
       driver_flags <- rep(FALSE, n_i)
@@ -361,6 +362,12 @@ create_mut_df <- function(tree, driver_info = tree$driver_info) {
     }
   }
 
+  mat <- if (length(blocks) > 0) {
+    do.call(rbind, blocks)
+  } else {
+    matrix(nrow = 0, ncol = length(tree$tip.label) + 1)   # no edge has length > 0
+  }
+  rm(blocks)
   colnames(mat) <- c("edge",tree$tip.label)
   mat <- as.data.frame(mat)
   ## `edge` is character, not numeric, from the start -- one comma-separated

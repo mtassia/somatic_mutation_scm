@@ -41,6 +41,34 @@ def sim_seed(wildcards):
     key = f"{wildcards.n}_{wildcards.t}_{wildcards.viol_mult}_{wildcards.rep}"
     return int(hashlib.md5(key.encode()).hexdigest()[:7], 16) # < 2**28
 
+def sim_mem_mb(wildcards, attempt):
+    """Peak memory (MB) requested for one simulation, as a function of sample
+    size n (and age t).
+
+    Cost driver: the (mutation records x samples) genotype matrices.
+    records ~ t * (190 + 11.25 * n)   (fit to 6 runs, within ~15%)
+    cells   = records * (n + 1)
+
+    Peak process RSS of a whole run, measured on macOS after create_mut_df()
+    was changed to rbind() once instead of once per edge:
+        n=50  t=40 ( 1.5M cells): 3.15 GB
+        n=100 t=40 ( 5.3M cells): 3.28 GB
+        n=200 t=40 (19.6M cells): 6.75 GB
+    i.e. ~2-3 GB fixed (R + libraries) plus ~245 bytes per cell, which is
+    modelled as 2000 MB + 250 B/cell, floored at 3.5 GB, plus 20% headroom.
+    (Before that change the same runs peaked at 3.4 / 4.0 / 12-13 GB, with a
+    per-cell cost that kept rising with n.)
+
+    Everything beyond n = 200 is EXTRAPOLATED, and allocator behaviour differs
+    between macOS and Linux, so compare against the cluster's reported peak
+    after a first run (e.g. `sacct -j <id> --format=JobID,MaxRSS,ReqMem,State`).
+    Each retry (profile: restart-times) asks for 50% more, so an underestimate
+    recovers instead of failing identically every time."""
+    n, t = int(wildcards.n), int(wildcards.t)
+    cells = t * (190 + 11.25 * n) * (n + 1)
+    est_mb = max(3500, 2000 + cells * 250 / 1e6) * 1.2
+    return int(est_mb * (1 + 0.5 * (attempt - 1)))
+
 #--- RULES ---#
 rule all:
     input:
@@ -103,7 +131,7 @@ rule simulate_ground_truth:
     conda: "envs/simulate_history.yaml"
     threads: 1
     resources:
-        mem_mb = 16000
+        mem_mb = sim_mem_mb
     log: "logs/simulate_ground_truth/n{n}_t{t}_v{viol_mult}_r{rep}.log"
     shell:
         """
