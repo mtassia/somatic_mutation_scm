@@ -66,7 +66,7 @@ rule all:
     input:
         "resources/mask.bed",
         "results/rsimpop_installed.txt",
-        expand("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf.gz",
+        expand("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestModel",
                n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, rep=REPS)
 
 rule download_mask:
@@ -80,13 +80,27 @@ rule download_mask:
         """
 
 rule clone_rsimpop:
-    output: directory("results/rsimpop")
+    output: 
+        repo = directory("results/rsimpop")
     params:
         repo = config["rsimpop_repo"],
         commit = config["rsimpop_commit"]
     shell:
         """
         git clone {params.repo} {output}
+        git -C {output} checkout {params.commit}
+        """
+
+rule clone_cellphy:
+    output: 
+        repo = directory("results/cellphy"),
+        script = "results/cellphy/cellphy.sh"
+    params:
+        repo = config["cellphy_repo"],
+        commit = config["cellphy_commit"]
+    shell:
+        """
+        git clone {params.repo} {output.repo}
         git -C {output} checkout {params.commit}
         """
 
@@ -136,4 +150,29 @@ rule simulate_ground_truth:
             --mask {input.mask} \\
             --out_dir {params.out_dir} \\
             --prefix {params.prefix} > {log} 2>&1
+        """
+
+rule fit_Q_cellphy:
+    input:
+        nwk = rules.simulate_ground_truth.output.nwk,
+        vcf = rules.simulate_ground_truth.output.vcf,
+        cellphy = rules.clone_cellphy.output.script
+    output:
+        bestTree = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestTree",
+        bestModel = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestModel"
+    threads: 4
+    params:
+        prefix = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}"
+    shell:
+        """
+        {input.cellphy} \
+            RAXML \
+            --evaluate \
+            --msa {input.vcf} \
+            --msa-format vcf \
+            --model GT10+FO \
+            --tree {input.nwk} \
+            --prefix {params.prefix} \
+            --threads {threads} \
+            --force perf_threads
         """

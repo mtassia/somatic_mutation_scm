@@ -25,3 +25,4 @@ dependencies:
   - r-data.table
   - r-scales
   - r-rcolorbrewer
+  - bcftools
