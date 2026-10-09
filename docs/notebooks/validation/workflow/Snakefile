@@ -42,6 +42,15 @@ wildcard_constraints:
 CHROMS  = [f"chr{c}" for c in range(1, 23)] + ["chrX"]
 SCM_BIN = "../../../smk/workflow/bin"   # SCM scripts, relative to the launch directory (validation/)
 
+# hg38 chromosome lengths (Mb)
+CHROM_MB = {"chr1": 248.96, "chr2": 242.19, "chr3": 198.30, "chr4": 190.21,
+            "chr5": 181.54, "chr6": 170.81, "chr7": 159.35, "chr8": 145.14,
+            "chr9": 138.39, "chr10": 133.80, "chr11": 135.09, "chr12": 133.28,
+            "chr13": 114.36, "chr14": 107.04, "chr15": 101.99, "chr16": 90.34,
+            "chr17": 83.26, "chr18": 80.37, "chr19": 58.62, "chr20": 64.44,
+            "chr21": 46.71, "chr22": 50.82, "chrX": 156.04}
+
+#--- FUNCTIONS ---#
 def sim_seed(wildcards):
     """Seed unique to each simulation, derived from its wildcards."""
     key = f"{wildcards.n}_{wildcards.t}_{wildcards.viol_mult}_{wildcards.rep}"
@@ -85,31 +94,11 @@ def fit_mem_mb(wildcards, input, attempt):
     est_mb = max(2000, fit_sites(wildcards, input) * 2 * int(wildcards.n) * 200 / 1e6)
     return int(est_mb * (1 + 0.5 * (attempt - 1)))
 
-# hg38 chromosome lengths (Mb); records are spread over the genome roughly in
-# proportion to length, so a chromosome holds ~length/total of a simulation's records.
-CHROM_MB = {"chr1": 248.96, "chr2": 242.19, "chr3": 198.30, "chr4": 190.21,
-            "chr5": 181.54, "chr6": 170.81, "chr7": 159.35, "chr8": 145.14,
-            "chr9": 138.39, "chr10": 133.80, "chr11": 135.09, "chr12": 133.28,
-            "chr13": 114.36, "chr14": 107.04, "chr15": 101.99, "chr16": 90.34,
-            "chr17": 83.26, "chr18": 80.37, "chr19": 58.62, "chr20": 64.44,
-            "chr21": 46.71, "chr22": 50.82, "chrX": 156.04}
+
 
 def scm_mem_mb(wildcards, input, attempt):
     """Memory (MB) for one per-chromosome SCM job.
-
-    A job loads its chromosome's VCF and builds one genotype-prior table per
-    locus (compile_gt_states.snp), so memory scales with
-        cells = records on the chromosome * (n + 1).
-    records = exact total from count_sites * the chromosome's share of the
-    genome (length-proportional, +20% for the mask's uneven coverage).
-
-    Measured on macOS (peak RSS of vcfR read + compile_gt_states.snp, n=100):
-        28k cells: 0.45 GB,  169k cells: 0.69 GB,  484k cells: 1.27 GB
-    i.e. ~0.4 GB + 1.8 KB per cell and a prep time of ~50 us per cell.  Modelled
-    here as 2 GB + 2.5 KB per cell (1.4x the measured slope as allowance for
-    the Linux allocator and the 4 worker processes), plus 20% headroom.
-    The measurements stop at 0.5M cells; n=500 chr1 is 5-12M cells, so this is
-    an extrapolation: compare with `sacct` MaxRSS.  Retries add 50% each."""
+    Retries add 50% each."""
     share = 1.2 * CHROM_MB[wildcards.chrom] / sum(CHROM_MB.values())
     cells = share * fit_sites(wildcards, input) * (int(wildcards.n) + 1)
     est_mb = max(4000, (2000 + cells * 2500 / 1e6) * 1.2)
@@ -124,7 +113,8 @@ def scm_chrom_h5s(wildcards):
 #--- RULES ---#
 localrules:
     clone_rsimpop,
-    clone_cellphy
+    clone_cellphy,
+    count_sites
 
 rule all:
     input:

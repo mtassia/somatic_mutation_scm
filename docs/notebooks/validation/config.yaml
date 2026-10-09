@@ -8,4 +8,4 @@ pop_size: 10000
 rsimpop_repo: "https://github.com/nangalialab/rsimpop.git"
 rsimpop_commit: "dc76d53618c96ac831a90ebe1250e2b3ae73293c"
 cellphy_repo: "https://github.com/amkozlov/cellphy.git"
-cellphy_commit: "bcb73f6e4cd549726328837e1773a6f3582450c0"
+cellphy_commit: "3d2238e582048245daf0f6dfedaf63238fa7b53d"
