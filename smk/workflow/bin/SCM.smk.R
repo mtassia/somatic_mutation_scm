@@ -454,8 +454,7 @@ runSCM_single <- function(x, tree, gt_state_list,
     Qmat <- Qmat[colnames(gt_matrix), colnames(gt_matrix)]
   }
   
-  # Prep cores and print run info
-  cl <- makeCluster(cores)
+  # Print run info
   if (!quietly) {
     cat(paste0("Performing stochastic character mapping on ", x, "...\n"))
     cat(paste0("Cores: ", cores, "\n"))
@@ -463,25 +462,33 @@ runSCM_single <- function(x, tree, gt_state_list,
     cat(paste0("Reduced Qmatrix: ", reduced, "\n"))
   }
   
-  # Run phytools::make.simmap() using all cores specified in <cl>
-  scm <- parLapply(cl,
-                   X = replicate(cores,
-                                 as.matrix(gt_matrix),
-                                 simplify = FALSE),
-                   fun = make.simmap,
-                   tree = tree,
-                   Q = Qmat,
-                   pi = root_state,
-                   nsim = as.integer(round(reps / cores))) %>%
-         do.call("c", .)
-  
+  # Run phytools::make.simmap() in one forked worker per core.
+  scm <- mclapply(X = replicate(cores,
+                                as.matrix(gt_matrix),
+                                simplify = FALSE),
+                  FUN = make.simmap,
+                  tree = tree,
+                  Q = Qmat,
+                  pi = root_state,
+                  nsim = as.integer(round(reps / cores)),
+                  mc.cores = cores)
+
+  # mclapply() returns a worker's error (or NULL if the worker was killed)
+  # instead of stopping, so fail explicitly
+  failed <- vapply(scm, function(s) is.null(s) || inherits(s, "try-error"),
+                   logical(1))
+  if (any(failed)) {
+    stop(paste0("make.simmap() failed in ", sum(failed), " of ", cores,
+                " worker(s) for ", x, ": ",
+                paste(unique(unlist(lapply(scm[failed], as.character))),
+                      collapse = "; ")))
+  }
+  scm <- do.call("c", scm)
+
   # Reclass simmap if not properly classed by output above
   if(!("multiSimmap" %in% class(scm))) {
     class(scm) <- c("multiSimmap",class(scm))
   }
-  
-  # Clear cluster
-  stopCluster(cl)
 
   # Return multiimmap object
   return(scm)
