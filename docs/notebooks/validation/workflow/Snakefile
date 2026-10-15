@@ -292,7 +292,7 @@ rule scm_chromosome:
         prefix = "results/scm/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}",
         reps   = config["scm_reps"]
     conda: "../../../../smk/workflow/envs/scm.yaml"
-    threads: 4
+    threads: 5
     resources:
         mem_mb = scm_mem_mb
     log: "logs/scm_chromosome/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.log"
