@@ -471,6 +471,7 @@ runSCM_single <- function(x, tree, gt_state_list,
                   Q = Qmat,
                   pi = root_state,
                   nsim = as.integer(round(reps / cores)),
+                  message = FALSE,
                   mc.cores = cores)
 
   # mclapply() returns a worker's error (or NULL if the worker was killed)
