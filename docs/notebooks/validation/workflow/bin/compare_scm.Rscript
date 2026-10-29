@@ -1,0 +1,79 @@
+#!/usr/bin/env Rscript
+## Compare SCM's inferred mutation origins with the simulated ground truth for
+## one simulation.
+##
+## USAGE:
+##   Rscript compare_scm.Rscript --vcf results/sims/<sim>.vcf.gz \
+##       --truth results/sims/<sim>.truth.rds \
+##       --scm_tree results/scm/trees/<sim>.scm.nwk \
+##       --h5 results/scm/merged/<sim>.h5 \
+##       --out results/scm/compare/<sim>.tsv --threads 4
+##
+## OUTPUT: one row per locus that SCM mapped (loci skipped by the singleton
+## LRT have no assignment and are absent), from compare_scm_edges(full_df = TRUE),
+## plus CHROM, POS and the ISM_VIOL / N_ORIGINS / DRIVER INFO tags of the
+## ground-truth VCF.
+
+## ---- locate and load the shared functions --------------------------------
+script_dir <- local({
+  f <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
+  if (length(f) == 1) dirname(normalizePath(f)) else getwd()
+})
+functions_file <- file.path(script_dir, "simphy_functions.R")
+if (!file.exists(functions_file)) stop("Could not find simphy_functions.R next to this script: ", functions_file)
+suppressPackageStartupMessages(library(optparse))
+suppressMessages(suppressWarnings(source(functions_file)))
+
+## ---- argument parsing ----------------------------------------------------
+option_list <- list(
+  make_option("--vcf", type = "character", help = "REQUIRED. Ground-truth VCF (.vcf.gz) with EDGE= INFO tags."),
+  make_option("--truth", type = "character", help = "REQUIRED. <prefix>.truth.rds from simulate_ground_truth.Rscript."),
+  make_option("--scm_tree", type = "character", help = "REQUIRED. Tree written by write_burden_to_tree.R (<sim>.scm.nwk)."),
+  make_option("--h5", type = "character", help = "REQUIRED. Merged SCM h5 file."),
+  make_option("--out", type = "character", help = "REQUIRED. Output TSV."),
+  make_option("--threads", type = "integer", default = 1L, help = "Cores for compare_scm_edges() [default: %default]")
+)
+opt <- parse_args(OptionParser(option_list = option_list,
+                               description = "Compare SCM-inferred mutation origins with ground truth."))
+for (a in c("vcf", "truth", "scm_tree", "h5", "out")) {
+  if (is.null(opt[[a]])) stop("--", a, " is required.", call. = FALSE)
+}
+
+stage <- function(msg) cat(format(Sys.time(), "[%H:%M:%S] "), msg, "\n", sep = "")
+
+## ---- read inputs ---------------------------------------------------------
+stage("Reading ground-truth VCF")
+## CHROM, POS and INFO are all compare_scm_edges() needs; skip the genotype columns
+vcf_df <- data.table::fread(
+  cmd = paste("gzip -dc", shQuote(opt$vcf), "| grep -v '^##' | cut -f1-8"),
+  data.table = FALSE, sep = "\t", colClasses = c("#CHROM" = "character"))
+names(vcf_df)[1] <- "CHROM"
+
+sim_tree <- readRDS(opt$truth)$tr
+scm_tree <- ape::read.tree(opt$scm_tree)
+
+## ---- compare -------------------------------------------------------------
+stage("Comparing SCM assignments with ground truth")
+res <- compare_scm_edges(vcf_df = vcf_df, h5f_path = opt$h5,
+                         sim_tree = sim_tree, scm_tree = scm_tree,
+                         cores = opt$threads, full_df = TRUE)
+
+info_tag <- function(info, tag) {
+  m <- regmatches(info, regexpr(paste0("(^|;)", tag, "=[^;]*"), info))
+  out <- rep(NA_character_, length(info))
+  out[grepl(paste0("(^|;)", tag, "="), info)] <- sub(paste0("^;?", tag, "="), "", m)
+  out
+}
+loci <- data.frame(locus = paste(vcf_df$CHROM, vcf_df$POS, sep = "_"),
+                   CHROM = vcf_df$CHROM, POS = vcf_df$POS,
+                   ISM_VIOL = info_tag(vcf_df$INFO, "ISM_VIOL"),
+                   N_ORIGINS = info_tag(vcf_df$INFO, "N_ORIGINS"),
+                   DRIVER = info_tag(vcf_df$INFO, "DRIVER"),
+                   stringsAsFactors = FALSE)
+res <- dplyr::left_join(res, loci, by = "locus")
+
+dir.create(dirname(opt$out), recursive = TRUE, showWarnings = FALSE)
+write.table(res, file = opt$out, sep = "\t", quote = FALSE, row.names = FALSE)
+stage(sprintf("Wrote %d mapped loci (%d of %d VCF records) to %s; concordance %.3f",
+              nrow(res), nrow(res), nrow(vcf_df), opt$out,
+              if (nrow(res)) mean(res$correct) else NA_real_))

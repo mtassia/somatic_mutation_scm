@@ -9,5 +9,6 @@ smk/results/
 smk/sandbox/
 sandbox/
 cellphy/
+dev/
 .lintr
 .Rproj.user

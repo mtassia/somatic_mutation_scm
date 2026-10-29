@@ -92,7 +92,8 @@ rule merge_h5:
     params:
         h5_files_str = lambda w, input:",".join(input.h5_files)
     resources:
-        time = "1:00:00"
+        time = "1:00:00",
+        mem_mb = config["run_params"]["mem_mb"]
     conda:
         "envs/scm.yaml"
     shell:

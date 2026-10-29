@@ -1,8 +1,9 @@
-.RData
-.RDataTmp
-.Rhistory
-.Rproj.user
-test_sim/
-*.Rproj
-*.aux
-*.tex
+.snakemake/
+results/
+resources/
+logs/
+sandbox/
+.R*
+doc/*.Rproj
+doc/*.html
+doc/test_sim/
