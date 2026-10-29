@@ -5,5 +5,5 @@ logs/
 sandbox/
 .R*
 doc/*.Rproj
-doc/*.nb.html
+doc/*.html
 doc/test_sim/

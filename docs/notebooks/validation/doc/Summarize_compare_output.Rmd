@@ -1,0 +1,328 @@
+---
+title: "SCM performance plots"
+author: "Michael Tassia"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    df_print: paged
+  html_notebook:
+    math_method: katex
+    toc: true
+    toc_float: true
+---
+
+```{r setup, include = FALSE, warning = FALSE, message = FALSE}
+knitr::opts_chunk$set(comment = "",
+                      fig.align = 'center',
+                      out.width = "75%",
+                      warning = FALSE)
+library(tidyverse)
+library(cowplot)
+library(colorspace)
+```
+
+### Overview
+
+This notebook will analyze the aggregated output of the `compare_scm` rule (found [here](../workflow/Snakefile)). The TSV output of this rule has the following fields:
+
+1.  `locus`: Simulated locus in format *chrom_site*
+
+2.  `truth_edge_sim_numbering`: True edge on true tree where `locus` evolved mutation
+
+3.  `truth_edge_scm_numbering`: True edge on SCM tree corresponding to `truth_edge_sim_numbering`
+
+4.  `scm_assigned_edges`: Edge on SCM tree where `locus` is inferred to evolve
+
+5.  `n_edges_assigned`: Count of edges assigned mutation
+
+6.  `topology_mismatch`: Boolean of whether true tree and SCM tree are perfectly comparable
+
+7.  `correct`: Boolean of whether mutation assignment is accurate
+
+8.  `edge_distance`: Nearest-neighbor sum of edge distance between truth and inferred edges
+
+9.  `edge_distance_normalized`: `edge_distance` normalized by maximum edge distance on tree
+
+10. `CHROM`: Chromosome extracted from `locus`
+
+11. `POS`: Position on `CHROM` extracted from `locus`
+
+12. `ISM_VIOL` : Binary for whether site is true ISM violation
+
+13. `N_ORIGINS` : Number of origins inferred for locus
+
+14. `DRIVER` : Binary for whether `locus` is a driver mutation with a beneficial fitness effect
+
+In this first pass, we simulated data using a generative model that approximates clean 30X whole-genome sequence data with no allelic dropout or sequencing error. The ground-truth phylogeny generated during `rsimpop`'s population simulation is used as input for SCM, and SCM was run for 100 Monte Carlo replicates.
+
+Three replicates for each parameter combination were performed:
+
+| Sample size (*n* tips) | Simulated age (*t,* years) | ISM multiplier *(k)* |
+|------------------------|----------------------------|----------------------|
+| 20                     | 20                         | 0                    |
+| 50                     | 40                         | 1                    |
+| 100                    | 60                         | 10                   |
+|                        | 80                         | 100                  |
+
+For ISM violations introduced during simulation, $50\%$ of these were forced to affect driver mutations. Because ISM violations are introduced according to expectations under a uniform-rate birthday-problem model ($\frac{(\sum_{i}v_{i})^2}{2L}$), where $(\sum_{i}v_{i})^2$ is squared total tree length (measured in mutation count) and $2L$ is the diploid genome size. As such, below is a plot of the number of ISM violations introduced per simulation:
+
+```{r load-data, include = FALSE}
+
+# Functions
+parse_sim_params <- function(paths) {
+  ## n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv -> one row per file, one column per parameter
+  pattern <- "^n([0-9]+)_t([0-9]+)_v([0-9.]+)_d([0-9]+)_r([0-9]+)\\.tsv$"
+  files <- basename(paths)
+  bad <- !grepl(pattern, files)
+  if (any(bad)) {
+    stop("Not a compare_scm output name: ", paste(files[bad], collapse = ", "), call. = FALSE)
+  }
+  data.frame(
+    file      = paths,
+    n         = as.integer(sub(pattern, "\\1", files)),
+    t         = as.integer(sub(pattern, "\\2", files)),
+    viol_mult = as.numeric(sub(pattern, "\\3", files)),
+    depth     = as.integer(sub(pattern, "\\4", files)),
+    rep       = as.integer(sub(pattern, "\\5", files)),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Load files
+fps <- list.files(path = "~/somatic_evolution/users/mtassia1/somatic_mutation_scm/docs/notebooks/validation/results/scm/compare",
+                  full.names = TRUE)
+
+params <- parse_sim_params(fps) %>%
+  mutate(file = basename(file))
+
+all_loci <- read_tsv(file = fps, id = "file") %>%
+  mutate(file = basename(file))
+
+all_loci <- left_join(all_loci, params)
+
+# Plot ISM violations
+ggplot(all_loci)
+```
+
+---
+
+### Accuracy statistics
+
+#### Edge precision/recall
+
+This section presents the gross precision (true positives) and recall (true negatives) statistics across the simulation grid, as well as the percentage of mutations that cannot be confidently assigned to the tree. Here, all mutations are treated as independent observations, where ISM violations are split into their component mutations. Thus, this is the broadest category of accuracy, "*How well do we identify the true origin of any mutation event?"*
+
+```{r edge-level, echo = FALSE}
+
+# function to extract discrete edges from a vector of edges in data frame
+edge_list <- function(x) {
+  x <- as.character(x); x[is.na(x)] <- ""
+  lapply(strsplit(x, ","), function(v) as.integer(v[v != "NA" & nzchar(v)]))
+}
+
+# subset data frame to only comparable topologies
+d <- subset(all_loci, !topology_mismatch) 
+truth  <- edge_list(d$truth_edge_scm_numbering)
+called <- edge_list(d$scm_assigned_edges)
+
+d$TP <- mapply(function(a, b) length(intersect(a, b)), called, truth)
+d$FP <- mapply(function(a, b) length(setdiff(a, b)), called, truth)
+d$FN <- mapply(function(a, b) length(setdiff(b, a)), called, truth)
+d$TN <- (2 * d$n - 2) - d$TP - d$FP - d$FN   # edges in a rooted binary tree of n tips
+
+edge_cm <- matrix(colSums(d[, c("TP", "FN", "FP", "TN")]), 2, byrow = TRUE,
+                  dimnames = list(truth = c("origin", "not origin"),
+                                  scm   = c("assigned", "not assigned")))
+
+# aggregated precision/recall estimate
+precision <- edge_cm[1, 1] / sum(edge_cm[, 1])
+recall    <- edge_cm[1, 1] / sum(edge_cm[1, ])
+
+cat(paste("Aggregate precision:", signif(precision * 100, digits = 4)),
+    "\n",
+    paste("Aggregate recall:", signif(recall * 100, digits = 4)),
+    sep = "")
+
+# full grid
+per_rep <- d %>% group_by(n, t, viol_mult, rep) %>%
+  summarise(precision  = sum(TP) / sum(TP + FP),
+            recall     = sum(TP) / sum(TP + FN),
+            unassigned = mean(n_edges_assigned == 0), .groups = "drop")
+cell <- per_rep %>% 
+  pivot_longer(c(precision, recall, unassigned), 
+               names_to = "metric") %>%
+  group_by(n, t, viol_mult, metric) %>%
+  summarise(mean = mean(value), 
+            lo = quantile(value, .025), 
+            hi = quantile(value, .975), 
+            .groups = "drop")
+
+# plot
+ggplot(cell, 
+       aes(t, 
+           mean, 
+           colour = factor(viol_mult), 
+           group = viol_mult)) +
+  geom_line(linewidth = 0.5) +
+  geom_pointrange(aes(ymin = lo, ymax = hi), 
+                  size = 0.25, 
+                  linewidth = 0.4,
+                  position = position_dodge(width = 6)) +
+  facet_grid(metric ~ n, 
+             scales = "free_y", 
+             labeller = labeller(n = function(x) paste0("n = ", x))) +
+  scale_color_discrete_sequential(palette = "Oslo",
+                                  name = "ISM multiplier",
+                                  rev = FALSE,
+                                  nmax = 5,
+                                  order = 2:5) +
+  scale_x_continuous(breaks = c(20, 40, 60, 80)) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  theme_cowplot(11) +
+  theme(strip.background = element_blank(), legend.position = "top") +
+  labs(x = "age (years)", 
+       y = NULL)
+```
+
+#### Number of origins
+
+Here, we quantify whether the correct number of mutation events are measured by SCM – regardless of whether they're assigned to the correct edge.
+
+```{r n_origins, echo = FALSE}
+
+# classifier for n origins category
+cap <- function(k, from = 0, top = 3) {
+  factor(ifelse(k >= top, paste0(top, "+"), k), 
+         levels = c(from:(top - 1), paste0(top, "+")))
+}
+
+# data frame for n mutation accuracy
+oc <- d %>% 
+  filter(viol_mult > 0) %>%
+  count(viol_mult, 
+        true = cap(N_ORIGINS, 1), 
+        scm = cap(n_edges_assigned), 
+        .drop = FALSE) %>%
+  group_by(viol_mult, true) %>% 
+  mutate(p = n / sum(n)) %>% 
+  ungroup() %>% 
+  filter(is.finite(p))
+
+# plot
+ggplot(oc, 
+       aes(x = scm, 
+           y = true, 
+           fill = p)) +
+  geom_tile(colour = "white", 
+            linewidth = 1) +
+  geom_text(aes(label = sprintf("%.0f%%\n(%s)", 100 * p, 
+                                scales::comma(n)), 
+                colour = p > 0.5),
+            size = 3, 
+            lineheight = 0.9, 
+            show.legend = FALSE) +
+  scale_colour_manual(values = c(`TRUE` = "white", `FALSE` = "grey20")) +
+  scale_fill_continuous_sequential(palette = "Blues",
+                      limits = c(0, 1),
+                      begin = 0.1,
+                      labels = scales::percent, 
+                      name = "share of row") +
+  facet_wrap(~ viol_mult, 
+             labeller = labeller(viol_mult = function(x) paste0("ISM multiplier ", x))) +
+  coord_equal() + 
+  theme_cowplot(11) +
+  theme(strip.background = element_blank(), 
+        axis.line = element_blank(), 
+        axis.ticks = element_blank(),
+        legend.position = "none") +
+  labs(x = "inferred origins", 
+       y = "true origins")
+
+```
+
+#### ISM-violation detection
+
+Next we stratify to only ISM violations that were introduced during the ground truth simulation and quantify sensitivity and false-positive rate (FPR).
+
+```{r ism-violations, echo = FALSE}
+
+det <- d %>% 
+  group_by(n, viol_mult, rep) %>%
+  summarise(sensitivity = sum(ISM_VIOL == 1 & n_edges_assigned > 1) / sum(ISM_VIOL == 1),
+            FPR = sum(ISM_VIOL == 0 & n_edges_assigned > 1) / sum(ISM_VIOL == 0),
+            .groups = "drop") %>%
+  pivot_longer(c(sensitivity, FPR), names_to = "metric") %>% 
+  filter(is.finite(value)) %>%
+  group_by(n, viol_mult, metric) %>%
+  summarise(mean = mean(value), 
+            lo = quantile(value, .025), 
+            hi = quantile(value, .975), 
+            .groups = "drop")
+
+ggplot(det, 
+       aes(x = factor(viol_mult), 
+           y = mean, 
+           group = factor(n), 
+           color = factor(n))) +
+  geom_line(linewidth = 0.6, 
+            position = position_dodge(0.4)) +
+  geom_pointrange(aes(ymin = lo, 
+                      ymax = hi), 
+                  size = 0.25, 
+                  linewidth = 0.4, 
+                  position = position_dodge(0.4)) +
+  facet_wrap(~ metric, scales = "free_y") +
+  scale_color_discrete_sequential(palette = "Oslo",
+                                  name = "n",
+                                  rev = FALSE,
+                                  nmax = 5,
+                                  order = 2:5) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  theme_cowplot(12) + 
+  theme(strip.background = element_blank(), 
+        legend.position = "top") +
+  labs(x = "ISM multiplier", y = NULL)
+
+```
+
+#### Error distance
+
+```{r error-dist, echo = FALSE}
+
+ggplot(d %>% filter(!correct,
+                    !is.na(edge_distance_normalized)),
+       aes(x = edge_distance_normalized,
+           color = factor(n))) +
+  stat_ecdf(linewidth = 0.6,
+            pad = FALSE) +
+  facet_wrap(~ viol_mult,
+             nrow = 1,
+             labeller = labeller(viol_mult = function(x) paste0("ISM multiplier ", x))) +
+  scale_x_log10(breaks = c(0.01, 0.05, 0.1, 0.5, 1),
+                labels = scales::label_number(accuracy = 0.01, 
+                                              drop0trailing = TRUE)) +
+  scale_y_continuous(limits = c(0, 1),
+                     labels = scales::percent) +
+  scale_color_discrete_sequential(palette = "Oslo",
+                                  name = "n",
+                                  rev = FALSE,
+                                  nmax = 5,
+                                  order = 2:5) +
+  annotation_logticks(sides = "b", 
+                      outside = TRUE,
+                      short = unit(0.06, "cm"), 
+                      mid = unit(0.12, "cm"), 
+                      long = unit(0.18, "cm")) +
+  coord_cartesian(clip = "off") +
+  theme_cowplot(11) +
+  theme(strip.background = element_blank(),
+        legend.position = "top",
+        aspect.ratio = 1,
+        axis.ticks.x = element_blank(),
+        axis.text.x = element_text(margin = margin(t = 8))) +
+  background_grid(major = "xy", colour.major = "grey92") +
+  labs(x = "normalized distance",
+       y = "cumulative prop. of incorrect loci")
+
+```
