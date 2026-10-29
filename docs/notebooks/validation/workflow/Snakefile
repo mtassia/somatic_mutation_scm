@@ -23,17 +23,20 @@ shell.prefix("set -euo pipefail;")
 pathlib.Path("logs/").mkdir(parents=True, exist_ok=True)
 
 #--- SIMULATION GRID ---#
-# One simulation per (n, t, viol_mult, rep): n sampled cells, t years,
-# viol_mult x the expected number of ISM violations (0 = none), and rep = 1..sim_reps.
+# One simulation per (n, t, viol_mult, depth, rep): n sampled cells, t years,
+# viol_mult x the expected number of ISM violations (0 = none), mean sequencing
+# depth (D_bar), and rep = 1..sim_reps.
 SAMPLE_SIZES = config["n"]
 AGES         = config["t"]
 VIOL_MULTS   = config["viol_mult"]
+DEPTHS       = config["depth"]
 REPS         = list(range(1, config["sim_reps"] + 1))
 
 wildcard_constraints:
     n         = r"\d+",
     t         = r"\d+",
     viol_mult = r"[0-9.]+",
+    depth     = r"\d+",
     rep       = r"\d+",
     chrom     = r"chr(?:[0-9]+|X)"
 
@@ -52,7 +55,9 @@ CHROM_MB = {"chr1": 248.96, "chr2": 242.19, "chr3": 198.30, "chr4": 190.21,
 
 #--- FUNCTIONS ---#
 def sim_seed(wildcards):
-    """Seed unique to each simulation, derived from its wildcards."""
+    """Seed unique to each simulation, derived from its wildcards. Depth is left
+    out on purpose: simulations that differ only in depth share the same
+    history, mutations and loci, and differ only in their simulated reads."""
     key = f"{wildcards.n}_{wildcards.t}_{wildcards.viol_mult}_{wildcards.rep}"
     return int(hashlib.md5(key.encode()).hexdigest()[:7], 16) # < 2**28
 
@@ -106,9 +111,9 @@ def scm_mem_mb(wildcards, input, attempt):
 
 def scm_chrom_h5s(wildcards):
     """The per-chromosome h5 files of one simulation."""
-    return expand("results/scm/n{n}_t{t}_v{v}_r{r}.{chrom}.h5",
+    return expand("results/scm/n{n}_t{t}_v{v}_d{d}_r{r}.{chrom}.h5",
                   n=wildcards.n, t=wildcards.t, v=wildcards.viol_mult,
-                  r=wildcards.rep, chrom=CHROMS)
+                  d=wildcards.depth, r=wildcards.rep, chrom=CHROMS)
 
 #--- RULES ---#
 localrules:
@@ -120,8 +125,8 @@ rule all:
     input:
         "resources/mask.bed",
         "results/rsimpop_installed.txt",
-        expand("results/scm/compare/n{n}_t{t}_v{viol_mult}_r{rep}.tsv",
-               n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, rep=REPS)
+        expand("results/scm/compare/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv",
+               n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, depth=DEPTHS, rep=REPS)
 
 
 ## -- setup -- ##
@@ -177,19 +182,19 @@ rule install_rsimpop:
 
 ## -- simulate history -- ##
 
-# One job per (n, t, viol_mult, rep). viol_mult = 0 means no ISM violations
+# One job per (n, t, viol_mult, depth, rep). viol_mult = 0 means no ISM violations
 rule simulate_ground_truth:
     input:
         mask    = "resources/mask.bed",
         rsimpop = "results/rsimpop_installed.txt",
         script = "workflow/bin/simulate_ground_truth.Rscript"
     output:
-        vcf   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.vcf.gz",
-        nwk   = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.nwk",
-        truth = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.truth.rds"
+        vcf   = "results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.vcf.gz",
+        nwk   = "results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.nwk",
+        truth = "results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.truth.rds"
     params:
         out_dir     = "results/sims",
-        prefix      = "n{n}_t{t}_v{viol_mult}_r{rep}",
+        prefix      = "n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}",
         seed        = sim_seed,
         pop_size    = config["pop_size"],
         driver_prop = lambda wildcards: "--driver_prop 0.5" if float(wildcards.viol_mult) > 0 else ""
@@ -197,13 +202,14 @@ rule simulate_ground_truth:
     threads: 1
     resources:
         mem_mb = sim_mem_mb
-    log: "logs/simulate_ground_truth/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    log: "logs/simulate_ground_truth/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
     shell:
         """
         Rscript {input.script} \\
             --sample_size {wildcards.n} \\
             --age {wildcards.t} \\
             --ism_multiplier {wildcards.viol_mult} {params.driver_prop} \\
+            --depth {wildcards.depth} \\
             --seed {params.seed} \\
             --pop_size {params.pop_size} \\
             --mask {input.mask} \\
@@ -216,7 +222,7 @@ rule simulate_ground_truth:
 # Cheap pass that counts the VCF records, so fit_Q_cellphy can size itself
 rule count_sites:
     input: rules.simulate_ground_truth.output.vcf
-    output: temp("results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.nsites")
+    output: temp("results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.nsites")
     shell:
         """
         gzip -dc {input} | awk '!/^#/ {{n++}} END {{print n+0}}' > {output}
@@ -229,14 +235,14 @@ rule fit_Q_cellphy:
         vcf = rules.simulate_ground_truth.output.vcf,
         cellphy = rules.clone_cellphy.output.script
     output:
-        bestTree = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestTree",
-        bestModel = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}.raxml.bestModel"
+        bestTree = "results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.raxml.bestTree",
+        bestModel = "results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.raxml.bestModel"
     threads: fit_threads
     params:
-        prefix = "results/sims/n{n}_t{t}_v{viol_mult}_r{rep}"
+        prefix = "results/sims/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}"
     resources:
         mem_mb = fit_mem_mb
-    log: "logs/fit_Q_cellphy/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    log: "logs/fit_Q_cellphy/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
     shell:
         """
         {input.cellphy} \\
@@ -259,11 +265,11 @@ rule split_vcf_by_chrom:
     input:
         vcf = rules.simulate_ground_truth.output.vcf
     output:
-        temp(expand("results/scm/vcf/n{{n}}_t{{t}}_v{{viol_mult}}_r{{rep}}.{chrom}.vcf.gz",
+        temp(expand("results/scm/vcf/n{{n}}_t{{t}}_v{{viol_mult}}_d{{depth}}_r{{rep}}.{chrom}.vcf.gz",
                     chrom=CHROMS))
     params:
         chroms = " ".join(CHROMS),
-        prefix = "results/scm/vcf/n{n}_t{t}_v{viol_mult}_r{rep}"
+        prefix = "results/scm/vcf/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}"
     conda: "envs/htslib.yaml"
     threads: 1
     shell:
@@ -283,19 +289,19 @@ rule scm_chromosome:
         tree      = rules.fit_Q_cellphy.output.bestTree,
         model     = rules.fit_Q_cellphy.output.bestModel,
         nsites    = rules.count_sites.output[0],     # sizes mem_mb
-        vcf       = "results/scm/vcf/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.vcf.gz",
+        vcf       = "results/scm/vcf/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}.vcf.gz",
         script    = f"{SCM_BIN}/chromosome_scm.R",
         functions = f"{SCM_BIN}/SCM.smk.R"
     output:
-        h5 = temp("results/scm/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.h5")
+        h5 = temp("results/scm/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}.h5")
     params:
-        prefix = "results/scm/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}",
+        prefix = "results/scm/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}",
         reps   = config["scm_reps"]
     conda: "../../../../smk/workflow/envs/scm.yaml"
     threads: 5
     resources:
         mem_mb = scm_mem_mb
-    log: "logs/scm_chromosome/n{n}_t{t}_v{viol_mult}_r{rep}.{chrom}.log"
+    log: "logs/scm_chromosome/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}.log"
     shell:
         """
         Rscript {input.script} \\
@@ -316,13 +322,13 @@ rule merge_scm_h5:
         script    = f"{SCM_BIN}/merge_scm_h5.R",
         functions = f"{SCM_BIN}/SCM.smk.R"
     output:
-        h5 = "results/scm/merged/n{n}_t{t}_v{viol_mult}_r{rep}.h5"
+        h5 = "results/scm/merged/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.h5"
     params:
         h5_files_str = lambda wildcards, input: ",".join(input.h5_files)
     conda: "../../../../smk/workflow/envs/scm.yaml"
     resources:
         mem_mb = lambda wildcards, attempt: 4000 * attempt
-    log: "logs/merge_scm_h5/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    log: "logs/merge_scm_h5/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
     shell:
         """
         Rscript {input.script} \\
@@ -338,11 +344,11 @@ rule write_scm_tree:
         script    = f"{SCM_BIN}/write_burden_to_tree.R",
         functions = f"{SCM_BIN}/SCM.smk.R"
     output:
-        tree = "results/scm/trees/n{n}_t{t}_v{viol_mult}_r{rep}.scm.nwk"
+        tree = "results/scm/trees/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.scm.nwk"
     conda: "../../../../smk/workflow/envs/scm.yaml"
     resources:
         mem_mb = lambda wildcards, attempt: 4000 * attempt
-    log: "logs/write_scm_tree/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    log: "logs/write_scm_tree/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
     shell:
         """
         Rscript {input.script} \\
@@ -364,12 +370,12 @@ rule compare_scm:
         rsimpop = "results/rsimpop_installed.txt",
         script  = "workflow/bin/compare_scm.Rscript"
     output:
-        tsv = "results/scm/compare/n{n}_t{t}_v{viol_mult}_r{rep}.tsv"
+        tsv = "results/scm/compare/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv"
     conda: "envs/simulate_history.yaml"
     threads: 4
     resources:
         mem_mb = lambda wildcards, attempt: 4000 * attempt
-    log: "logs/compare_scm/n{n}_t{t}_v{viol_mult}_r{rep}.log"
+    log: "logs/compare_scm/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
     shell:
         """
         Rscript {input.script} \\

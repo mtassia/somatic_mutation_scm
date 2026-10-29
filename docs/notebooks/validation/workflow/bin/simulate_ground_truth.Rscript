@@ -22,6 +22,10 @@
 ##   --driver_prop      optional, in [0, 1]. Proportion of the ISM violations
 ##                      forced to include exactly one driver mutation
 ##                      (round(driver_prop x violations). Default: not used.
+##   --depth            target mean sequencing depth (D_bar in
+##                      simulate_DP_and_AD), default 30. Used only in the
+##                      read simulation, so runs that differ only in --depth
+##                      share the same history, mutations and loci.
 ##   --seed             integer, default 1212121.
 ##   --pop_size         full-population target size, default 10000.
 ##   --dfe_k            number of discrete fitness deviates for the ISM DFE,
@@ -47,7 +51,7 @@
 ##                      compare_scm_edges()), `tr_mol` is the rescaled tree.
 ##
 ## DESIGN PARAMETERS FIXED HERE:
-##   read simulation: D_bar = 30, min_cov = 10, max_cov = 250,
+##   read simulation: D_bar = --depth, min_cov = 10, max_cov = 250,
 ##   site_sdlog = 0.1, sample_sdlog = 0.1, theta = 8, rho_max = 0.1,
 ##   site_conc_shape = 4, site_conc_rate = 0.3, error_rate = 0,
 ##   dropout_rate = 0; driver rate 2e-3 / 365 per cell per day; background
@@ -73,6 +77,8 @@ option_list <- list(
               help = "REQUIRED. Years of simulated hematopoiesis."),
   make_option("--ism_multiplier", type = "double", default = 0,
               help = "Introduce this multiple of the expected number of ISM violations, each with 2 origins. 0 = NO ISM violations (continuous gamma DFE); > 0 uses the discretized gamma DFE of the 'Alternative ISM-violation strategy' [default %default]."),
+  make_option("--depth", type = "double", default = 30,
+              help = "Target mean sequencing depth (D_bar) for the read simulation [default %default]."),
   make_option("--seed", type = "double", default = 1212121,
               help = "RNG seed [default %default]."),
   make_option("--pop_size", type = "double", default = 1e4,
@@ -112,6 +118,7 @@ check_whole <- function(x, name) {
 check_whole(opt$sample_size, "sample_size"); check_whole(opt$seed, "seed"); check_whole(opt$dfe_k, "dfe_k")
 if (opt$sample_size < 1) stop("--sample_size must be >= 1", call. = FALSE)
 if (opt$age <= 0) stop("--age must be > 0", call. = FALSE)
+if (is.na(opt$depth) || opt$depth <= 0) stop("--depth must be > 0", call. = FALSE)
 ## --ism_multiplier is the single switch for ISM violations: 0 means none are
 ## introduced at all, > 0 means they are. A pipeline can therefore pass
 ## `--ism_multiplier {viol_mul}` for every job.
@@ -128,6 +135,7 @@ if (!is.null(opt$driver_prop) && !ism) warning("--driver_prop is ignored because
 
 sample_size    <- opt$sample_size
 age            <- opt$age
+depth          <- opt$depth
 seed           <- opt$seed
 pop_size       <- opt$pop_size
 dfe_k          <- opt$dfe_k
@@ -135,14 +143,14 @@ driver_prop    <- if (ism) opt$driver_prop else NULL
 mask_path      <- opt$mask
 out_dir        <- opt$out_dir
 prefix <- if (is.null(opt$prefix)) {
-  sprintf("sim_N%d_age%g_ism%d%s_seed%d", as.integer(sample_size), age, as.integer(ism),
-          if (ism) sprintf("_x%g", ism_multiplier) else "", as.integer(seed))
+  sprintf("sim_N%d_age%g_ism%d%s_D%g_seed%d", as.integer(sample_size), age, as.integer(ism),
+          if (ism) sprintf("_x%g", ism_multiplier) else "", depth, as.integer(seed))
 } else opt$prefix
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
 params <- list(sample_size = sample_size, age = age, ism = ism,
                ism_multiplier = if (ism) ism_multiplier else NA_real_,
-               seed = seed, pop_size = pop_size,
+               depth = depth, seed = seed, pop_size = pop_size,
                dfe_k = if (ism) dfe_k else NA_integer_,
                driver_prop = driver_prop, mask = mask_path)
 ## ---- progress reporting (stdout) -----------------------------------------
@@ -245,7 +253,7 @@ if (ism) {
 stage(sprintf("Simulating sequence reads (%s records x %d samples)",
               format(nrow(mut_mat), big.mark = ","), length(tr$tip.label)))
 sim_reads <- simulate_DP_and_AD(G = mut_mat,
-                                D_bar           = 30,
+                                D_bar           = depth,
                                 min_cov         = 10,
                                 max_cov         = 250,
                                 site_sdlog      = 0.1,
