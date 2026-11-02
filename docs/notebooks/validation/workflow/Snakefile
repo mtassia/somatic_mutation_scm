@@ -101,12 +101,13 @@ def fit_mem_mb(wildcards, input, attempt):
 
 
 
-def scm_mem_mb(wildcards, input, attempt):
-    """Memory (MB) for one per-chromosome SCM job.
-    Retries add 50% each."""
+def scm_mem_mb(wildcards, input, threads, attempt):
+    """Memory (MB) for one per-chromosome SCM job: the parent process plus
+    ~1 GB per forked make.simmap() worker, whose garbage collection copies the
+    parent's shared pages. Retries add 50% each."""
     share = 1.2 * CHROM_MB[wildcards.chrom] / sum(CHROM_MB.values())
     cells = share * fit_sites(wildcards, input) * (int(wildcards.n) + 1)
-    est_mb = max(4000, (2000 + cells * 2500 / 1e6) * 1.2)
+    est_mb = max(4000, (2000 + cells * 2500 / 1e6) * 1.2) + 1000 * threads
     return int(est_mb * (1 + 0.5 * (attempt - 1)))
 
 def scm_chrom_h5s(wildcards):
