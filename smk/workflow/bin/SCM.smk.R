@@ -489,6 +489,15 @@ runSCM_single <- function(x, tree, gt_state_list,
     cat(paste0("Reduced Qmatrix: ", reduced, "\n"))
   }
   
+  # Replicates are split evenly across workers: make.simmap() needs at least
+  # one per worker, and summarise_scm.snp() needs at least two in total.
+  nsim <- as.integer(round(reps / cores))
+  if (nsim < 1 || nsim * cores < 2) {
+    stop(paste0("reps = ", reps, " with cores = ", cores, " gives ", nsim,
+                " replicate(s) per worker; at least 1 per worker and 2 in ",
+                "total are needed"))
+  }
+
   # Run phytools::make.simmap() in one forked worker per core.
   scm <- mclapply(X = replicate(cores,
                                 as.matrix(gt_matrix),
@@ -497,7 +506,7 @@ runSCM_single <- function(x, tree, gt_state_list,
                   tree = tree,
                   Q = Qmat,
                   pi = root_state,
-                  nsim = as.integer(round(reps / cores)),
+                  nsim = nsim,
                   message = FALSE,
                   mc.cores = cores)
 
@@ -555,9 +564,22 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
     cat(paste0("Summarising SCM...\n"))
   }
   
+  # Genotype states visited by any replicate. A single state means no
+  # replicate maps a change anywhere on the tree (no mutation inferred).
+  mapped_states <- unique(unlist(lapply(multiSimmap, function(tr) {
+    unlist(lapply(tr$maps, names))
+  })))
+
   # Load data from multiSimmap (ancestral state estimates and tree)
   scm_summary <- summary(multiSimmap) #! Longest step
-  scm_summary <- scm_summary$ace %>% as.data.frame()
+  ace <- scm_summary$ace
+  # With a single mapped state, phytools returns $ace as one row with a column
+  # per node/tip; restore the usual node/tip-by-state layout.
+  if (length(mapped_states) == 1) {
+    ace <- t(ace)
+    colnames(ace) <- mapped_states
+  }
+  scm_summary <- ace %>% as.data.frame()
   tree <- multiSimmap[[1]]
   
   # Assign each sample it's posterior consensus state using
@@ -628,8 +650,14 @@ summarise_scm.snp <- function(multiSimmap, locus, PPthreshold = 0.95,
     dplyr::mutate(lower_95hpd = 0,
                   upper_95hpd = 0)
   
-  ## Create density object for SCM posteriors                  
-  dens.data <- density(multiSimmap)
+  ## Create density object for SCM posteriors. phytools' density() needs at
+  ## least one state change among the replicates: with a single mapped state
+  ## there are no transitions to count, so the HPD counts below stay at zero.
+  dens.data <- if (length(mapped_states) > 1) {
+    density(multiSimmap)
+  } else {
+    list(trans = character(0))
+  }
   
   ## Obtain the 95% HPD character state transitions and 
   ## populate hpd.df
