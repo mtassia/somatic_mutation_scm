@@ -58,12 +58,12 @@ In this first pass, we simulated data using a generative model that approximates
 
 Three replicates for each parameter combination were performed:
 
-| Sample size (*n* tips) | Simulated age (*t,* years) | ISM multiplier *(k)* |
-|------------------------|----------------------------|----------------------|
-| 20                     | 20                         | 0                    |
-| 50                     | 40                         | 1                    |
-| 100                    | 60                         | 10                   |
-|                        | 80                         | 100                  |
+| Sample size (*n* tips) | Simulated age (*t,* years) | ISM multiplier *(k)* | Depth *(d)* |
+|------------------|---------------------|-----------------|-----------------|
+| 20                     | 20                         | 0                    | 10          |
+| 50                     | 40                         | 1                    | 20          |
+| 100                    | 60                         | 10                   | 30          |
+|                        | 80                         | 100                  |             |
 
 For ISM violations introduced during simulation, $50\%$ of these were forced to affect driver mutations. Because ISM violations are introduced according to expectations under a uniform-rate birthday-problem model ($\frac{(\sum_{i}v_{i})^2}{2L}$), where $(\sum_{i}v_{i})^2$ is squared total tree length (measured in mutation count) and $2L$ is the diploid genome size. As such, below is a plot of the number of ISM violations introduced per simulation:
 
@@ -89,47 +89,66 @@ parse_sim_params <- function(paths) {
   )
 }
 
-# Load files
-fps <- list.files(path = "~/somatic_evolution/users/mtassia1/somatic_mutation_scm/docs/notebooks/validation/results/scm/compare",
-                  full.names = TRUE)
-
-params <- parse_sim_params(fps) %>%
-  mutate(file = basename(file))
-
-all_loci <- read_tsv(file = fps, id = "file") %>%
-  mutate(file = basename(file))
-
-all_loci <- left_join(all_loci, params)
-
-# Plot ISM violations
-ggplot(all_loci)
-```
-
----
-
-### Accuracy statistics
-
-#### Edge precision/recall
-
-This section presents the gross precision (true positives) and recall (true negatives) statistics across the simulation grid, as well as the percentage of mutations that cannot be confidently assigned to the tree. Here, all mutations are treated as independent observations, where ISM violations are split into their component mutations. Thus, this is the broadest category of accuracy, "*How well do we identify the true origin of any mutation event?"*
-
-```{r edge-level, echo = FALSE}
-
 # function to extract discrete edges from a vector of edges in data frame
 edge_list <- function(x) {
   x <- as.character(x); x[is.na(x)] <- ""
   lapply(strsplit(x, ","), function(v) as.integer(v[v != "NA" & nzchar(v)]))
 }
 
-# subset data frame to only comparable topologies
-d <- subset(all_loci, !topology_mismatch) 
-truth  <- edge_list(d$truth_edge_scm_numbering)
-called <- edge_list(d$scm_assigned_edges)
+# rows with a single true edge and at most one called edge: compare whole vectors
+edge_counts <- function(called_str, truth_str) {
+  called_str[is.na(called_str)] <- ""
+  multi <- grepl(",", called_str, fixed = TRUE) | grepl(",", truth_str, fixed = TRUE)
+  has_call <- nzchar(called_str)
+  TP <- as.integer(has_call & called_str == truth_str)
+  FP <- as.integer(has_call) - TP
+  FN <- 1L - TP
+  if (any(multi)) {                      # ISM violations / multi-edge calls: exact set logic
+    a <- edge_list(called_str[multi]); b <- edge_list(truth_str[multi])
+    TP[multi] <- mapply(function(a, b) length(intersect(a, b)), a, b)
+    FP[multi] <- mapply(function(a, b) length(setdiff(a, b)), a, b)
+    FN[multi] <- mapply(function(a, b) length(setdiff(b, a)), a, b)
+  }
+  data.frame(TP = TP, FP = FP, FN = FN)
+}
 
-d$TP <- mapply(function(a, b) length(intersect(a, b)), called, truth)
-d$FP <- mapply(function(a, b) length(setdiff(a, b)), called, truth)
-d$FN <- mapply(function(a, b) length(setdiff(b, a)), called, truth)
-d$TN <- (2 * d$n - 2) - d$TP - d$FP - d$FN   # edges in a rooted binary tree of n tips
+# Load files
+library(data.table)
+compare_dir <- "~/somatic_evolution/users/mtassia1/somatic_mutation_scm/docs/notebooks/validation/results/scm/compare"
+fps <- list.files(compare_dir, pattern = "\\.tsv$", full.names = TRUE)
+names(fps) <- basename(fps)
+cache_file <- file.path(dirname(compare_dir), "compare_summary.rds")
+
+cols <- c(truth_edge_scm_numbering = "character", scm_assigned_edges = "character",
+          n_edges_assigned = "integer", topology_mismatch = "logical", correct = "logical",
+          edge_distance_normalized = "double", ISM_VIOL = "integer", N_ORIGINS = "integer")
+
+# read one compare_scm TSV: only the columns used below, comparable topologies only
+read_one <- function(f) {
+  x <- fread(f, select = cols, sep = "\t")[topology_mismatch == FALSE]
+  cbind(x, edge_counts(x$scm_assigned_edges, x$truth_edge_scm_numbering))
+}
+
+# reuse the cached table unless a compare TSV is newer than it
+if (file.exists(cache_file) && file.mtime(cache_file) > max(file.mtime(fps))) {
+  d <- readRDS(cache_file)
+} else {
+  d <- rbindlist(parallel::mclapply(fps, read_one, mc.cores = 8), idcol = "file")
+  d <- merge(d, as.data.table(parse_sim_params(names(fps)))[, file := basename(file)], by = "file")
+  d[, TN := (2L * n - 2L) - TP - FP - FN]
+  saveRDS(d, cache_file)
+}
+```
+
+------------------------------------------------------------------------
+
+### Accuracy statistics
+
+#### Edge precision/recall
+
+This section presents the gross precision, $\frac{TP}{TP + FP}$, and recall, $\frac{TP}{TP + FN}$, statistics across the simulation grid, as well as the percentage of mutations that cannot be confidently assigned to the tree. Here, all mutations are treated as independent observations, where ISM violations are split into their component mutations. Thus, this is the broadest category of accuracy, "*How well do we identify the true origin of any mutation event?"*
+
+```{r edge-level, echo = FALSE}
 
 edge_cm <- matrix(colSums(d[, c("TP", "FN", "FP", "TN")]), 2, byrow = TRUE,
                   dimnames = list(truth = c("origin", "not origin"),
@@ -144,8 +163,8 @@ cat(paste("Aggregate precision:", signif(precision * 100, digits = 4)),
     paste("Aggregate recall:", signif(recall * 100, digits = 4)),
     sep = "")
 
-# full grid
-per_rep <- d %>% group_by(n, t, viol_mult, rep) %>%
+# full grid: one row per simulation
+per_rep <- d %>% group_by(n, t, viol_mult, depth, rep) %>%
   summarise(precision  = sum(TP) / sum(TP + FP),
             recall     = sum(TP) / sum(TP + FN),
             unassigned = mean(n_edges_assigned == 0), .groups = "drop")
@@ -324,5 +343,57 @@ ggplot(d %>% filter(!correct,
   background_grid(major = "xy", colour.major = "grey92") +
   labs(x = "normalized distance",
        y = "cumulative prop. of incorrect loci")
+
+```
+
+### Effect of sequencing depth
+
+Until this point, we've aggregated all simulated depths $d = \{10X, 20X, 30X\}$. Below, we separate the effect of depth and sample size.
+
+```{r depth-n-accuracy, echo = FALSE}
+
+# per-simulation accuracy: all loci, and ISM-violation loci only
+acc <- d %>%
+  group_by(n, t, viol_mult, depth, rep) %>%
+  summarise(`All loci`       = mean(correct),
+            `ISM violations` = if (any(ISM_VIOL %in% 1)) mean(correct[ISM_VIOL %in% 1]) else NA_real_,
+            .groups = "drop") %>%
+  pivot_longer(c(`All loci`, `ISM violations`),
+               names_to = "subset",
+               values_to = "accuracy") %>%
+  filter(!is.na(accuracy)) %>%                 # simulations without violations
+  group_by(subset, n, depth) %>%
+  summarise(mean   = mean(accuracy),
+            lo     = quantile(accuracy, .025),
+            hi     = quantile(accuracy, .975),
+            n_sims = dplyr::n(),
+            .groups = "drop")
+
+# plot
+ggplot(acc,
+       aes(x = factor(depth),
+           y = mean,
+           colour = factor(n),
+           group = factor(n))) +
+  geom_line(linewidth = 0.5,
+            position = position_dodge(width = 0.3)) +
+  geom_pointrange(aes(ymin = lo, ymax = hi),
+                  size = 0.25,
+                  linewidth = 0.4,
+                  position = position_dodge(width = 0.3)) +
+  facet_wrap(~ subset, scales = "free_y") +
+  scale_x_discrete(labels = function(x) paste0(x, "×")) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  scale_color_discrete_sequential(palette = "Oslo",
+                                  name = "n",
+                                  rev = FALSE,
+                                  nmax = 5,
+                                  order = 2:5) +
+  theme_cowplot(11) +
+  theme(strip.background = element_blank(),
+        legend.position = "top") +
+  background_grid(major = "y", colour.major = "grey92") +
+  labs(x = "mean sequencing depth",
+       y = "accuracy (correct edge assignment)")
 
 ```
