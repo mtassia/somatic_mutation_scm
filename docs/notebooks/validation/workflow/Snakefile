@@ -110,9 +110,9 @@ def scm_mem_mb(wildcards, input, threads, attempt):
     est_mb = max(4000, (2000 + cells * 2500 / 1e6) * 1.2) + 1000 * threads
     return int(est_mb * (1 + 0.5 * (attempt - 1)))
 
-def scm_chrom_h5s(wildcards):
+def scm_chrom_h5s(wildcards, scm_dir="results/scm"):
     """The per-chromosome h5 files of one simulation."""
-    return expand("results/scm/n{n}_t{t}_v{v}_d{d}_r{r}.{chrom}.h5",
+    return expand("{dir}/n{n}_t{t}_v{v}_d{d}_r{r}.{chrom}.h5", dir=scm_dir,
                   n=wildcards.n, t=wildcards.t, v=wildcards.viol_mult,
                   d=wildcards.depth, r=wildcards.rep, chrom=CHROMS)
 
@@ -120,13 +120,18 @@ def scm_chrom_h5s(wildcards):
 localrules:
     clone_rsimpop,
     clone_cellphy,
-    count_sites
+    count_sites,
+    count_sites_inferred
 
 rule all:
     input:
         "resources/mask.bed",
         "results/rsimpop_installed.txt",
         expand("results/scm/compare/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv",
+               n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, depth=DEPTHS, rep=REPS),
+        expand("results/scm_inferred/compare/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv",
+               n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, depth=DEPTHS, rep=REPS),
+        expand("results/scm_inferred/tree_dist/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv",
                n=SAMPLE_SIZES, t=AGES, viol_mult=VIOL_MULTS, depth=DEPTHS, rep=REPS)
 
 
@@ -386,4 +391,114 @@ rule compare_scm:
             --h5 {input.h5} \\
             --out {output.tsv} \\
             --threads {threads} > {log} 2>&1
+        """
+
+## -- scm on the inferred tree -- ##
+
+use rule count_sites as count_sites_inferred with:
+    output: temp("results/sims_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.nsites")
+
+rule infer_tree_cellphy:
+    input:
+        nsites = rules.count_sites_inferred.output[0],
+        vcf = rules.simulate_ground_truth.output.vcf,
+        cellphy = rules.clone_cellphy.output.script
+    output:
+        bestTree = "results/sims_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.raxml.bestTree",
+        bestModel = "results/sims_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.raxml.bestModel"
+    threads: fit_threads
+    params:
+        prefix = "results/sims_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}",
+        seed   = sim_seed
+    resources:
+        mem_mb = fit_mem_mb
+    log: "logs/infer_tree_cellphy/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
+    shell:
+        """
+        {input.cellphy} \\
+            RAXML \\
+            --search \\
+            --msa {input.vcf} \\
+            --msa-format vcf \\
+            --model GT10+FO \\
+            --prefix {params.prefix} \\
+            --seed {params.seed} \\
+            --threads {threads} \\
+            --redo \\
+            --force perf_threads > {log} 2>&1
+        """
+
+use rule split_vcf_by_chrom as split_vcf_by_chrom_inferred with:
+    output:
+        temp(expand("results/scm_inferred/vcf/n{{n}}_t{{t}}_v{{viol_mult}}_d{{depth}}_r{{rep}}.{chrom}.vcf.gz",
+                    chrom=CHROMS))
+    params:
+        chroms = " ".join(CHROMS),
+        prefix = "results/scm_inferred/vcf/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}"
+
+use rule scm_chromosome as scm_chromosome_inferred with:
+    input:
+        tree      = rules.infer_tree_cellphy.output.bestTree,
+        model     = rules.infer_tree_cellphy.output.bestModel,
+        nsites    = rules.count_sites_inferred.output[0],
+        vcf       = "results/scm_inferred/vcf/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}.vcf.gz",
+        script    = f"{SCM_BIN}/chromosome_scm.R",
+        functions = f"{SCM_BIN}/SCM.smk.R"
+    output:
+        h5 = temp("results/scm_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}.h5")
+    params:
+        prefix = "results/scm_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}",
+        reps   = config["scm_reps"]
+    log: "logs/scm_chromosome_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.{chrom}.log"
+
+use rule merge_scm_h5 as merge_scm_h5_inferred with:
+    input:
+        h5_files  = lambda wildcards: scm_chrom_h5s(wildcards, "results/scm_inferred"),
+        script    = f"{SCM_BIN}/merge_scm_h5.R",
+        functions = f"{SCM_BIN}/SCM.smk.R"
+    output:
+        h5 = "results/scm_inferred/merged/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.h5"
+    log: "logs/merge_scm_h5_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
+
+use rule write_scm_tree as write_scm_tree_inferred with:
+    input:
+        h5        = rules.merge_scm_h5_inferred.output.h5,
+        tree      = rules.infer_tree_cellphy.output.bestTree,
+        script    = f"{SCM_BIN}/write_burden_to_tree.R",
+        functions = f"{SCM_BIN}/SCM.smk.R"
+    output:
+        tree = "results/scm_inferred/trees/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.scm.nwk"
+    log: "logs/write_scm_tree_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
+
+use rule compare_scm as compare_scm_inferred with:
+    input:
+        vcf     = rules.simulate_ground_truth.output.vcf,
+        truth   = rules.simulate_ground_truth.output.truth,
+        h5      = rules.merge_scm_h5_inferred.output.h5,
+        scm_tree = rules.write_scm_tree_inferred.output.tree,
+        rsimpop = "results/rsimpop_installed.txt",
+        script  = "workflow/bin/compare_scm.Rscript"
+    output:
+        tsv = "results/scm_inferred/compare/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv"
+    log: "logs/compare_scm_inferred/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
+
+rule tree_distance:
+    input:
+        truth   = rules.simulate_ground_truth.output.truth,
+        tree    = rules.infer_tree_cellphy.output.bestTree,
+        rsimpop = "results/rsimpop_installed.txt",
+        script  = "workflow/bin/tree_distance.Rscript"
+    output:
+        tsv = "results/scm_inferred/tree_dist/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.tsv"
+    conda: "envs/simulate_history.yaml"
+    resources:
+        mem_mb = lambda wildcards, attempt: 4000 * attempt
+    log: "logs/tree_distance/n{n}_t{t}_v{viol_mult}_d{depth}_r{rep}.log"
+    shell:
+        """
+        Rscript {input.script} \\
+            --truth {input.truth} \\
+            --tree {input.tree} \\
+            --outgroup s1 \\
+            --out {output.tsv} > {log} 2>&1
         """

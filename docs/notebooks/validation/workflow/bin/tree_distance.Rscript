@@ -1,0 +1,92 @@
+#!/usr/bin/env Rscript
+## Compare a CellPhy-inferred tree with the simulated ground-truth tree for one
+## simulation.
+##
+## USAGE:
+##   Rscript tree_distance.Rscript --truth results/sims/<sim>.truth.rds \
+##       --tree results/sims_inferred/<sim>.raxml.bestTree \
+##       --outgroup s1 --out results/scm_inferred/tree_dist/<sim>.tsv
+##
+## Both trees are rooted on the outgroup and the outgroup is then dropped, as
+## chromosome_scm.R and write_burden_to_tree.R do, so clades are compared the
+## same way compare_scm_edges() matches edges (by descendant tip set).
+##
+## OUTPUT: one row with
+##   n_tips           tips after dropping the outgroup
+##   true_clades, inferred_clades, shared_clades
+##                    clades of 2 to n_tips - 1 tips in each tree, and in both
+##   clade_recall     shared / true;  clade_precision  shared / inferred
+##   rf, nrf          rooted Robinson-Foulds distance (true + inferred - 2 x shared),
+##                    and the same over (true + inferred)
+##   mut_recall       share of true mutations (truth-tree edge lengths) on edges
+##                    whose clade the inferred tree recovers: the most SCM edge
+##                    assignments that can be correct on this tree
+##   shared_mut_recall
+##                    the same over mutations on internal edges only. Tip edges
+##                    always exist in the inferred tree, so this is the share
+##                    that tree error can actually cost
+
+## ---- locate and load the shared functions --------------------------------
+script_dir <- local({
+  f <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value = TRUE))
+  if (length(f) == 1) dirname(normalizePath(f)) else getwd()
+})
+functions_file <- file.path(script_dir, "simphy_functions.R")
+if (!file.exists(functions_file)) stop("Could not find simphy_functions.R next to this script: ", functions_file)
+suppressPackageStartupMessages(library(optparse))
+suppressMessages(suppressWarnings(source(functions_file)))
+
+## ---- argument parsing ----------------------------------------------------
+option_list <- list(
+  make_option("--truth", type = "character", help = "REQUIRED. <prefix>.truth.rds from simulate_ground_truth.Rscript."),
+  make_option("--tree", type = "character", help = "REQUIRED. Inferred tree (CellPhy .raxml.bestTree)."),
+  make_option("--outgroup", type = "character", default = "s1", help = "Outgroup tip [default: %default]"),
+  make_option("--out", type = "character", help = "REQUIRED. Output TSV.")
+)
+opt <- parse_args(OptionParser(option_list = option_list,
+                               description = "Compare an inferred tree with the ground-truth tree."))
+for (a in c("truth", "tree", "out")) {
+  if (is.null(opt[[a]])) stop("--", a, " is required.", call. = FALSE)
+}
+
+## ---- compare -------------------------------------------------------------
+prep_tree <- function(tr, outgroup) {
+  tr <- ape::root(tr, outgroup = outgroup, resolve.root = TRUE)
+  ape::drop.tip(tr, outgroup)
+}
+true_tr <- prep_tree(readRDS(opt$truth)$tr, opt$outgroup)
+inf_tr  <- prep_tree(ape::read.tree(opt$tree), opt$outgroup)
+if (!setequal(true_tr$tip.label, inf_tr$tip.label)) {
+  stop("The inferred and true trees have different tips.", call. = FALSE)
+}
+
+true_keys <- edge_bipartitions(true_tr)
+inf_keys  <- edge_bipartitions(inf_tr)
+n_tip <- length(true_tr$tip.label)
+
+## clades = tip sets below internal edges
+true_cl <- unique(true_keys[true_tr$edge[, 2] > n_tip])
+inf_cl  <- unique(inf_keys[inf_tr$edge[, 2] > n_tip])
+shared  <- length(intersect(true_cl, inf_cl))
+rf      <- length(true_cl) + length(inf_cl) - 2 * shared
+
+## create_mut_df() emits floor(edge length) mutations per edge
+muts      <- floor(true_tr$edge.length)
+recovered <- true_keys %in% inf_keys
+internal  <- true_tr$edge[, 2] > n_tip
+
+res <- data.frame(n_tips          = n_tip,
+                  true_clades     = length(true_cl),
+                  inferred_clades = length(inf_cl),
+                  shared_clades   = shared,
+                  clade_recall    = shared / length(true_cl),
+                  clade_precision = shared / length(inf_cl),
+                  rf              = rf,
+                  nrf             = rf / (length(true_cl) + length(inf_cl)),
+                  mut_recall      = sum(muts[recovered]) / sum(muts),
+                  shared_mut_recall = sum(muts[recovered & internal]) / sum(muts[internal]))
+
+dir.create(dirname(opt$out), recursive = TRUE, showWarnings = FALSE)
+write.table(res, file = opt$out, sep = "\t", quote = FALSE, row.names = FALSE)
+cat(sprintf("clade recall %.3f, precision %.3f, nRF %.3f, mutation recall %.4f (shared %.4f)\n",
+            res$clade_recall, res$clade_precision, res$nrf, res$mut_recall, res$shared_mut_recall))
